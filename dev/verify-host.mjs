@@ -21,10 +21,34 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginDir = resolve(here, '..')
-/* 默认根 = 插件父目录（= 本仓库）。可用 DSH_CONDOPT_VERIFY_ROOT 指向一个「可写临时根」
-   （复制 scripts/ + src/ + pyproject.toml + runs/<study>），以便在沙箱里也跑真写入断言。 */
+/**
+ * condopt 根解析（位置无关）：
+ *   ① `DSH_CONDOPT_VERIFY_ROOT` → ② `CONDOPT_ROOT` → ③ 插件目录的上一级（`link:` 安装时就是仓库根）。
+ * 每一级都要求「同时存在 `scripts/run_condopt.py` 与 `src/condopt/cli.py`」，不合法就继续下一级。
+ * 全都不合法时 `repoRoot` 退化为插件父目录、`hasRealRoot = false`：**离线断言照跑**，所有真 CLI /
+ * 写路径断言以明确原因 SKIP，进程仍 exit 0（发布仓库 fresh clone 不能因为找不到检出就崩）。
+ * （`DSH_CONDOPT_VERIFY_ROOT` 只属于 harness，方便沙箱里指向一个可写临时根。）
+ */
 const pluginParent = resolve(pluginDir, '..')
-const repoRoot = process.env.DSH_CONDOPT_VERIFY_ROOT ? resolve(process.env.DSH_CONDOPT_VERIFY_ROOT) : pluginParent
+function looksLikeCondoptRoot(dir) {
+  return typeof dir === 'string' && dir.trim() !== ''
+    && existsSync(join(dir, 'scripts', 'run_condopt.py'))
+    && existsSync(join(dir, 'src', 'condopt', 'cli.py'))
+}
+const rootCandidates = []
+if (typeof process.env.DSH_CONDOPT_VERIFY_ROOT === 'string' && process.env.DSH_CONDOPT_VERIFY_ROOT.trim() !== '') {
+  rootCandidates.push({ dir: resolve(process.env.DSH_CONDOPT_VERIFY_ROOT), source: 'DSH_CONDOPT_VERIFY_ROOT' })
+}
+if (typeof process.env.CONDOPT_ROOT === 'string' && process.env.CONDOPT_ROOT.trim() !== '') {
+  rootCandidates.push({ dir: resolve(process.env.CONDOPT_ROOT), source: 'CONDOPT_ROOT' })
+}
+rootCandidates.push({ dir: pluginParent, source: '插件目录的上一级' })
+const matchedRoot = rootCandidates.find((candidate) => looksLikeCondoptRoot(candidate.dir))
+const hasRealRoot = matchedRoot !== undefined
+/* repoRoot 永远是个字符串（真根，或插件父目录），纯路径类断言用它做算术；真 CLI 断言看 hasRealRoot。 */
+const repoRoot = hasRealRoot ? matchedRoot.dir : pluginParent
+const NO_ROOT_REASON = '未找到 condopt 检出：设置 DSH_CONDOPT_VERIFY_ROOT 或 CONDOPT_ROOT 指向一个 condopt 仓库'
+  + '（需含 scripts/run_condopt.py 与 src/condopt/cli.py）；纯离线断言已照跑'
 const fixturesDir = join(here, 'fixtures')
 const indexPath = join(pluginDir, 'index.js')
 const skipReal = process.env.DSH_CONDOPT_SKIP_REAL === '1' || process.argv.includes('--skip-real')
@@ -102,7 +126,7 @@ function samePath(a, b) {
 
 /* ------------------------------------------------------------------ 被测文件 */
 
-process.stdout.write(`dsh-condopt host harness\n  plugin : ${pluginDir}\n  repo   : ${repoRoot}\n`)
+process.stdout.write(`dsh-condopt host harness\n  plugin : ${pluginDir}\n  repo   : ${repoRoot}${hasRealRoot ? `  （condopt 检出：${matchedRoot.source}）` : '  （未找到 condopt 检出：真 CLI/写路径断言将 SKIP）'}\n`)
 
 if (!existsSync(indexPath)) {
   process.stdout.write(`\n[缺失] ${indexPath} 不存在 —— 宿主侧实现尚未落地，无法验收（这是预期内的“文件不存在”）。\n`)
@@ -202,8 +226,15 @@ await mkdir(nowherCwd, { recursive: true })
   } finally {
     process.chdir(prevCwd)
   }
-  check('v1.4 插件父目录候选命中（= 插件父目录）', r8 && samePath(r8.root, pluginParent), `root=${pluginParent}`, JSON.stringify(r8))
-  check('v1.4 命中 source 不是 arg/env/config/session/cwd/none', r8 && typeof r8.source === 'string' && !['arg', 'env', 'config', 'session', 'cwd', 'none'].includes(r8.source), '专有 source 词面', JSON.stringify(r8 && r8.source))
+  if (looksLikeCondoptRoot(pluginParent)) {
+    /* 只有「插件父目录确实是合法 condopt 根」（link: 安装 / 真仓库里跑）时才可能命中候选 ④。 */
+    check('v1.4 插件父目录候选命中（= 插件父目录）', r8 && samePath(r8.root, pluginParent), `root=${pluginParent}`, JSON.stringify(r8))
+    check('v1.4 命中 source 不是 arg/env/config/session/cwd/none', r8 && typeof r8.source === 'string' && !['arg', 'env', 'config', 'session', 'cwd', 'none'].includes(r8.source), '专有 source 词面', JSON.stringify(r8 && r8.source))
+  } else {
+    /* 根来自环境变量（发布仓库 fresh clone 常见）：候选 ④ 不成立，断言「按实际候选解析」而不是词面。 */
+    check('插件父目录不是 condopt 根时不误命中（root-not-found）', r8 && r8.root === null && r8.code === 'root-not-found', "{root:null, code:'root-not-found'}", JSON.stringify(r8))
+    if (!hasRealRoot) skip('v1.4 插件父目录候选 source 词面', NO_ROOT_REASON)
+  }
 }
 
 /* v1.4 候选 6：workspaceRegistry / workspaces 列表里第一个合法根（用 selfDir 隔离候选 4）。 */
@@ -640,6 +671,12 @@ group('apply 激活期惰性（cordis without-inject 回归）')
     return { ctx, reg, calls }
   }
 
+  if (!hasRealRoot) {
+    for (const name of ['不带 sessionId 的请求不访问 agents', '带 sessionId 时才软访问 agents', 'agents=undefined 时 /api/health 仍 200', 'agents getter 抛错时 /api/health 仍 200']) {
+      skip(`激活期惰性（${name}）`, NO_ROOT_REASON)
+    }
+  } else {
+
   const sessionCwdDir = join(tmpBase, 'session-cwd-root')
   await mkdir(sessionCwdDir, { recursive: true })
   const withAgents = makeCtx(() => ({ get: (id) => ({ session: { header: { cwd: sessionCwdDir } } }) }))
@@ -668,6 +705,7 @@ group('apply 激活期惰性（cordis without-inject 回归）')
   const h3 = badAgents.reg.routes[0] && badAgents.reg.routes[0].handler
   const badRes = await thrownAsync(() => call(h3, { url: '/condopt/api/health?sessionId=s1' }))
   check('agents getter 抛错时 /api/health 仍 200（第 5 级静默跳过）', !badRes.threw && badRes.value.status === 200, '200', badRes.threw ? `throw ${badRes.err && badRes.err.message}` : String(badRes.value.status))
+  }
 }
 
 /* ------------------------------------------------------------------ 9. createHandler 路由分派 */
@@ -798,12 +836,22 @@ if (handler) {
     check('POST /api/health → 404（v1.4 定稿）', !r.threw && r.value.status === 404, '404', r.threw ? 'throw' : `${r.value.status} ${JSON.stringify(r.value.json)}`)
   }
   {
-    /* DESIGN 措辞把 HEAD 列在"非 405"的动词里，但路由表只登记了 GET；两种都接受。 */
-    const r = await thrownAsync(() => call(handler, { method: 'HEAD', url: '/condopt/api/health' }))
-    const status = r.threw ? 0 : r.value.status
-    check('HEAD /api/health → 200 或 404（不 405）', status === 200 || status === 404, '200/404', r.threw ? 'throw' : String(status))
-    if (status === 404) note('HEAD 未单独登记路由（404）：DESIGN 未明确要求 HEAD 200，可接受')
+    /* DESIGN 措辞把 HEAD 列在"非 405"的动词里，但路由表只登记了 GET；两种都接受。
+       注意：HEAD 与 GET 走同一段 root 解析，没有可用根时会先 409——那是另一条语义，跳过。 */
+    if (!hasRealRoot) {
+      skip('HEAD /api/health → 200 或 404（不 405）', NO_ROOT_REASON)
+    } else {
+      const r = await thrownAsync(() => call(handler, { method: 'HEAD', url: '/condopt/api/health' }))
+      const status = r.threw ? 0 : r.value.status
+      check('HEAD /api/health → 200 或 404（不 405）', status === 200 || status === 404, '200/404', r.threw ? 'throw' : String(status))
+      if (status === 404) note('HEAD 未单独登记路由（404）：DESIGN 未明确要求 HEAD 200，可接受')
+    }
   }
+
+  if (!hasRealRoot) {
+    skip('createHandler 真数据/写路径（9.2–9.6：health/studies/spec/view/study/exec 真跑）', NO_ROOT_REASON)
+    note('离线断言（导出面 / 纯函数 / 路由分派 404-405 / 409 root-not-found）不受影响，照跑')
+  } else {
 
   /* 9.2 health / studies / spec —— 真 root，只读 */
   {
@@ -965,6 +1013,8 @@ if (handler) {
     }
   }
 
+  } /* end hasRealRoot */
+
   /* 9.7 root 解析失败 → 409 */
   {
     const emptyRoot = join(tmpBase, 'nowhere')
@@ -991,8 +1041,10 @@ group('renderView（DESIGN §4 真实渲染 / 零写入）')
 
 if (skipReal) {
   note('DSH_CONDOPT_SKIP_REAL=1：跳过真实渲染')
+} else if (!hasRealRoot) {
+  skip('renderView 真实渲染 demo_moo', NO_ROOT_REASON)
 } else if (!existsSync(join(repoRoot, 'scripts', 'run_condopt.py'))) {
-  note('仓库根找不到 scripts/run_condopt.py，跳过真实渲染')
+  skip('renderView 真实渲染 demo_moo', NO_ROOT_REASON)
 } else {
   const runDir = join(repoRoot, 'runs', 'demo_moo')
   if (!existsSync(join(runDir, 'problem.json'))) {
@@ -1071,7 +1123,9 @@ group('v2.0 stateToken（DESIGN §8.6A）')
 
 group('v2.0 /api/study 的 stateToken + current（DESIGN §8.6A）')
 
-if (handler && !skipReal) {
+if (!hasRealRoot) {
+  skip('v2.0 /api/study 字段（stateToken/current）', NO_ROOT_REASON)
+} else if (handler && !skipReal) {
   const runDir = join(repoRoot, 'runs', 'demo_moo')
   if (!existsSync(join(runDir, 'problem.json'))) {
     note('runs/demo_moo 不存在，跳过 /api/study v2.0 字段断言')
@@ -1143,8 +1197,10 @@ if (typeof mod.readCurrent === 'function') {
       check('readCurrent 含 9 键', missingKeys.length === 0, KEYS.join(','), `missing=${missingKeys.join(',')}`)
       check('readCurrent.algorithm 非空', cur && typeof cur.algorithm === 'string' && cur.algorithm.length > 0, 'string', String(cur && cur.algorithm))
     }
-  } else {
+  } else if (hasRealRoot) {
     note('runs/demo_moo 不存在，跳过 readCurrent 断言')
+  } else {
+    skip('readCurrent(demo_moo)', NO_ROOT_REASON)
   }
 } else {
   note('未导出 readCurrent（DESIGN 未冻结该名字）：跳过辅助导出单测')
@@ -1152,10 +1208,12 @@ if (typeof mod.readCurrent === 'function') {
 
 group('v2.0 expect 状态令牌（DESIGN §8.6A）')
 
-const writeBlocked = !(await probeWrite(join(repoRoot, 'runs', '__dsh_verify_probe__')))
+const writeBlocked = !hasRealRoot ? true : !(await probeWrite(join(repoRoot, 'runs', '__dsh_verify_probe__')))
 if (writeBlocked) note('本会话沙箱不允许在 <root>/runs 下创建目录 → 真写入类断言降级为 SKIP（请在非沙箱环境重跑取最终数）')
 
-if (handler && !skipReal) {
+if (!hasRealRoot) {
+  skip('v2.0 expect 令牌六命令 409', NO_ROOT_REASON)
+} else if (handler && !skipReal) {
   const demoRun = join(repoRoot, 'runs', 'demo_moo')
   if (!existsSync(join(demoRun, 'problem.json'))) {
     note('runs/demo_moo 不存在，跳过 expect 断言')
@@ -1178,7 +1236,9 @@ if (handler && !skipReal) {
 
 group('v2.0 tell resultsText 校验（DESIGN §8.6B，写前拒绝）')
 
-if (handler && !skipReal) {
+if (!hasRealRoot) {
+  skip('v2.0 tell resultsText 校验（写前拒绝）', NO_ROOT_REASON)
+} else if (handler && !skipReal) {
   const cases = [
     ['空串', ''],
     ['5001 行', Array.from({ length: 5001 }, (_, i) => `{"id":"r${i}","y":${i}}`).join('\n')],
@@ -1200,14 +1260,18 @@ group('v2.0 真写路径：expect 放行 / 无 expect / tell 三形态 receipt�
 
 if (skipReal) {
   note('--skip-real：跳过 v2.0 真写路径')
+} else if (!hasRealRoot) {
+  for (const name of ['expect 匹配放行', '未带 expect 不校验', 'tell JSON 数组 receipt', 'tell JSONL receipt', 'tell CSV receipt', 'tell 临时文件已删']) {
+    skip(`v2.0 ${name}`, NO_ROOT_REASON)
+  }
 } else if (writeBlocked) {
   for (const name of ['expect 匹配放行', '未带 expect 不校验', 'tell JSON 数组 receipt', 'tell JSONL receipt', 'tell CSV receipt', 'tell 临时文件已删']) {
-    skip(`v2.0 ${name}`, '本会话沙箱禁止在 <root>/runs 下创建目录（Access denied）；请在非沙箱环境重跑取最终数')
+    skip(`v2.0 ${name}`, '本会话沙箱禁止在 <root>/runs 下创建目录（Access denied）；设置 DSH_CONDOPT_VERIFY_ROOT 指向可写临时根，或在非沙箱环境重跑')
   }
 } else if (!handler) {
   note('handler 不可用，跳过 v2.0 真写路径')
 } else if (!existsSync(join(repoRoot, 'scripts', 'run_condopt.py'))) {
-  note('找不到 scripts/run_condopt.py，跳过 v2.0 真写路径')
+  skip('v2.0 tell/expect 真写路径', NO_ROOT_REASON)
 } else {
   const clones = []
   const cloneRun = async (suffix, sourceDir) => {
@@ -1392,6 +1456,10 @@ const failed = results.filter((r) => !r.ok)
 const passed = results.filter((r) => r.ok && !r.skipped).length
 process.stdout.write(`\n========================================\n`)
 process.stdout.write(`verify-host: ${passed}/${results.length} 通过，${failed.length} 失败，${skips.length} 跳过${skipReal ? '（--skip-real）' : ''}\n`)
+if (!hasRealRoot) {
+  process.stdout.write(`注意：${NO_ROOT_REASON}\n`)
+  process.stdout.write(`      离线断言（导出面 / 纯函数 / 解析 / 路由分派 / 409）已全部照跑；真 CLI 与写路径已 SKIP。\n`)
+}
 if (skips.length > 0) {
   process.stdout.write('跳过项（环境限制，非失败）：\n')
   for (const s of skips) process.stdout.write(`  - ${s.name}：${s.reason}\n`)

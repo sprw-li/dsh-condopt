@@ -3,32 +3,31 @@
 契约：[`../DESIGN.md`](../DESIGN.md) §8。本文件给每条检查**可复制的命令、期望输出、当前实测结果、已知限制**。
 除 A7 外都不需要 GUI；A2/A3 是离线 harness（真加载被测文件，不做字符串匹配式假测试）。
 
-> 本文的“最终实测”是 **2026-11-20** 的冻结快照（v1.4 时代）：`index.js` sha256 `CBC3AECC…`、
-> `client.js` sha256 `2A4A2C4D…`；**A1 `node --check` 双 exit 0；A2 234/234；A3 70/70；
-> A2 `--skip-real` 206/206；A5 17/19（两项红与插件无关）；A7 真机接口全 200（tab 出图由用户刷新后目视确认）。**
->
-> **v2.0（DESIGN §8.6）断言已全绿**（冻结证据 `index.js` sha `0D29CAEB…`、`client.js` sha `42109921…`）：
+> 本文的“最终实测”= **2026-11-20 v2.0 冻结快照**（`index.js` sha `0D29CAEB…`、`client.js` sha `42109921…`）：
 > - **A1** `node --check index.js|client.js` → 双 exit 0
-> - **A2** 真实仓库（DSH 沙箱）：`277/283 通过，0 失败，6 SKIP`；**可写根 / danger-full-access 等价跑：`315/315，0 失败，0 SKIP`**（6 组真写入全部真跑）
-> - **A3** `100/100，0 失败`
-> - Lead 真机 A7：ask→tell 垂直切片全绿（见 A7 节）；`tell` 临时文件实测残留 = 0
+> - **A2** 真实仓库（DSH 沙箱）：`277/283 通过，0 失败，6 SKIP`；**可写根跑：`315/315，0 失败，0 SKIP`**
+> - **A3** `100/100，0 失败`（完全离线，与检出位置无关）
+> - **A7** ask→tell 垂直切片真机全绿（见 A7 节）；`tell` 临时文件实测残留 = 0
 >
-> 说明：Lead 在 danger-full-access 下第一次跑出 `307/307` 时，harness 还没有后面补的「激活期惰性」(+6) 与
-> 「辅助导出 parseResultsText/readCurrent」(+9) 两组；含这两组后的总数是 **315**。最终以 Lead 的一致性复跑为准。
+> A2 的数字随「有没有 condopt 检出 / `runs/` 可不可写」变化（三条自测表见 A2 节）：独立 clone 无检出 =
+> `199/217 + 18 SKIP`，指向检出 = `276/282 + 6 SKIP`（沙箱）/ `314/314`（可写）。Lead 的 danger-full-access
+> 首次 `307/307` 是后补 15 条断言（激活惰性 +6、辅助导出 +9）之前的数，当前真仓库可写布局总数是 `315`。
 >
 > v1.4 冻结快照（更早一轮，供对照）：A2 234/234、A3 70/70、`--skip-real` 206/206、A5 17/19、A7 接口全 200。
 
 ## 0. 一分钟全量
 
 ```powershell
-cd <dsh-plugin-dir>
+cd <dsh-plugin-dir>                    # 可以是一个独立 clone；检出位置由下面三级解析
 node --check index.js                 # A1
 node --check client.js                # A1
-node dev/verify-host.mjs              # A2（含真机 python 子项）
-node dev/verify-client.mjs            # A3
+node dev/verify-host.mjs              # A2（含真机 python 子项；找不到检出时真机项 SKIP，仍 exit 0）
+node dev/verify-client.mjs            # A3（完全离线）
 ```
 
 期望：四条命令都 `exit 0`，末尾分别打印 `verify-host: PASS` / `verify-client: PASS`。
+若 `verify-host` 报 `SKIP`（没有 condopt 检出 / `runs/` 不可写），那是环境限制而非失败——
+想让真 CLI 断言也跑起来：`$env:DSH_CONDOPT_VERIFY_ROOT='<condopt 仓库>'; node dev/verify-host.mjs`。
 
 ## A1 语法
 
@@ -52,7 +51,31 @@ $env:DSH_CONDOPT_SKIP_REAL='1'; node dev/verify-host.mjs; Remove-Item Env:DSH_CO
 
 - 期望：末尾 `verify-host: N/N 通过，0 失败`，exit 0；失败时逐条打印
   `[分组] 断言名 / 期望 / 实际` 并以 exit 1 收尾。
-- **当前结果（v2.0）**：真实仓库（沙箱）**277/283 通过，0 失败，6 SKIP**；可写根（复制 `scripts/`+`src/`+`pyproject.toml`+`runs/<study>`，用 `DSH_CONDOPT_VERIFY_ROOT` 指过去）**315/315，0 失败，0 SKIP** —— 那 6 组真写入（expect 放行/不校验、tell 三形态、临时文件清理）在可写环境全部真跑。v1.4 快照为 234/234。
+- **当前结果（v2.0）**：真实仓库（沙箱）**277/283 通过，0 失败，6 SKIP**；指向可写临时根 **315/315，0 失败，0 SKIP**
+  —— 那 6 组真写入（expect 放行/不校验、tell 三形态、临时文件清理）在可写环境全部真跑。v1.4 快照为 234/234。
+
+**位置无关的 condopt 根解析（发布仓库自证 / fresh clone）**
+
+harness 按 **`DSH_CONDOPT_VERIFY_ROOT` → `CONDOPT_ROOT` → 插件目录的上一级** 顺序找检出，
+每一级都要求同时存在 `scripts/run_condopt.py` 与 `src/condopt/cli.py`，不合法就继续下一级。
+全都不合法时：**离线断言（导出面 / 纯函数 / 解析 / 路由分派 / 409）照跑**，真 CLI 与写路径全部
+`SKIP`（文案：`未找到 condopt 检出：设置 DSH_CONDOPT_VERIFY_ROOT 或 CONDOPT_ROOT 指向一个 condopt 仓库…`），
+进程 **exit 0**，不会 ENOENT / 未捕获异常。三条自测（2026-11-20）：
+
+| 场景 | 命令 | 结果 |
+|---|---|---|
+| (a) 真仓库 | `node dev/verify-host.mjs`（本仓库，沙箱） | `277/283，0 失败，6 SKIP`，exit 0 |
+| (a') 真仓库可写 | `DSH_CONDOPT_VERIFY_ROOT=<可写临时根>` | `315/315，0 失败，0 SKIP`，exit 0 |
+| (b) 独立 clone、无环境变量、旁边无检出 | `node dev/verify-host.mjs` | `199/217，0 失败，18 SKIP`，exit 0；无崩溃 |
+| (c) 独立 clone + 指向检出 | `DSH_CONDOPT_VERIFY_ROOT=<condopt 仓库>`（或 `CONDOPT_ROOT`） | `276/282，0 失败，6 SKIP`（沙箱）；指向可写临时根 `314/314` |
+
+```powershell
+# (b) 独立 clone 的最朴素跑法：不设任何环境变量也能 exit 0（真 CLI 断言 SKIP）
+node dev/verify-client.mjs        # 完全离线，100/100
+node dev/verify-host.mjs
+# (c) 指一个 condopt 检出（或可写临时根）即可全跑
+$env:DSH_CONDOPT_VERIFY_ROOT = 'D:\path\to\condopt'; node dev/verify-host.mjs; Remove-Item Env:DSH_CONDOPT_VERIFY_ROOT
+```
 
 ```powershell
 # 想在沙箱里也跑真写入组：造一个可写临时根再指过去
@@ -142,11 +165,12 @@ v2.0 的断言就在同两条命令里跑（`node dev/verify-host.mjs` / `node d
 | 409 `state-changed` | 写操作收到 409 → 该次点击只有 1 个 POST（**不重试**）、显示「状态已变化/已刷新」、之后出现 GET study/view 刷新 |
 | 工具卡交接 | 有「在条件优化面板中打开」按钮；点击触发 `layout.openRightbar` + `openTab('condopt')`；再挂载面板时按该 run 取视图（demo，而非 studies 首条 demo_moo） |
 
-- **环境限制（重要）**：真写入类断言（`expect` 放行/不校验、tell 三形态真跑、临时文件清理）需要能在
-  `<root>/runs` 下创建临时 study 副本。DSH 文件沙箱会拒绝该目录创建，此时 harness 打印 `SKIP …` 并
-  **不计失败**。两种取得真实数字的路径：① 在 danger-full-access 环境直接跑（Lead 首次跑得 `307/307`、0 SKIP，
-  当时 harness 还没有后补的 15 条断言）；② 沙箱里用 `DSH_CONDOPT_VERIFY_ROOT` 指向一个可写临时根
-  （A2 节给了可复制的命令）——本 harness 这种跑法实测 `315/315`、0 SKIP。
+- **环境限制（重要）**：两类断言会 `SKIP` 且**不计失败**：
+  1. **找不到 condopt 检出**（独立 clone / 发布仓库 fresh clone）→ 真 CLI 与写路径 SKIP，文案见上；
+     纯离线断言照跑，进程仍 exit 0。
+  2. **`<root>/runs` 不可写**（DSH 文件沙箱）→ `expect 放行/不校验、tell 三形态、临时文件清理` SKIP。
+  两种都能靠 `DSH_CONDOPT_VERIFY_ROOT` 指向一个合法（且可写的）condopt 根绕过；等价全绿为 `315/315`（真仓库布局）
+  或 `314/314`（独立 clone 布局）。
 
 ## A4 真实视图管线（纯读）
 

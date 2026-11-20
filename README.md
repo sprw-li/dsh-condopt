@@ -152,19 +152,32 @@ stateTokenBefore,stateTokenAfter}`（前后计数由宿主自行读 run 目录�
 
 ## 验收
 
+本仓库（`dsh-plugin/`）可以单独 clone 出来跑验收：`dev/verify-host.mjs` 会按
+**`DSH_CONDOPT_VERIFY_ROOT` → `CONDOPT_ROOT` → 插件目录的上一级** 的顺序找 condopt 检出，
+每一级都要求「同时存在 `scripts/run_condopt.py` 与 `src/condopt/cli.py`」，不合法就继续下一级。
+
 ```powershell
 cd dsh-plugin
 node --check index.js; node --check client.js     # A1
-node dev/verify-host.mjs                          # A2：真加载 index.js（可写环境 315/315；受限沙箱 277/283 + 6 SKIP）
-node dev/verify-client.mjs                        # A3：node:vm 加载 client.js，100 条断言
+node dev/verify-client.mjs                        # A3：node:vm 加载 client.js，100 条断言（完全离线）
+node dev/verify-host.mjs                          # A2：真加载 index.js
 node dev/verify-host.mjs --skip-real              # 不跑 python 的纯离线模式
 ```
 
+A2 的三种典型结果（都是 exit 0）：
+
+| 场景 | 结果 |
+|---|---|
+| 真仓库（`link:` 安装布局） | 受限沙箱 `277/283 + 6 SKIP`；可写环境 `315/315` |
+| 独立 clone、**没设环境变量**、旁边没有 condopt 检出 | `199/217 + 18 SKIP`——导出面/纯函数/解析/路由分派/409 等离线断言照跑，真 CLI 与写路径以明确原因 SKIP |
+| 独立 clone + `DSH_CONDOPT_VERIFY_ROOT=<condopt 仓库>`（或 `CONDOPT_ROOT`） | `276/282 + 6 SKIP`（沙箱）；指向可写临时根则 `314/314` |
+
 其余门禁（A4 真实渲染、A5 仓库门禁、A6 独立性、A7 真机 GUI）见 [`docs/VERIFY.md`](docs/VERIFY.md)。
 
-> 沙箱里 `runs/` 不可写时，A2 的 6 组真写入断言会显示 `SKIP`；把它们跑成真断言的办法：
-> 造一个可写临时根（复制 `scripts/`、`src/`、`pyproject.toml`、`runs/demo_moo`），
-> 用 `DSH_CONDOPT_VERIFY_ROOT=<那个根>` 指过去再跑 `node dev/verify-host.mjs`（详见 VERIFY.md）。
+> 缺检出时的 SKIP 文案会写明：`未找到 condopt 检出：设置 DSH_CONDOPT_VERIFY_ROOT 或 CONDOPT_ROOT
+> 指向一个 condopt 仓库（需含 scripts/run_condopt.py 与 src/condopt/cli.py）`；**不会** ENOENT 崩溃。
+> 沙箱里 `runs/` 不可写时，A2 的 6 组真写入断言同样 SKIP；造一个可写临时根（复制 `scripts/`、`src/`、
+> `pyproject.toml`、`runs/demo_moo`）再用 `DSH_CONDOPT_VERIFY_ROOT` 指过去即可全跑（详见 VERIFY.md）。
 
 ## 独立性 / 发布
 
