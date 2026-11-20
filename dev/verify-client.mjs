@@ -77,6 +77,7 @@ const shadowRoots = []
 const shadowWrites = []
 const storage = new Map()
 const fetchCalls = []
+const clipboardWrites = []
 const windowListeners = new Map()
 const liveIntervals = new Set()
 const liveTimeouts = new Set()
@@ -186,11 +187,13 @@ const FIX = {
   conflict: JSON.parse(readFileSync(join(fixturesDir, 'conflict.json'), 'utf8')),
   tellRows: readFileSync(join(fixturesDir, 'tell-rows.jsonl'), 'utf8'),
   diagnostics: JSON.parse(readFileSync(join(fixturesDir, 'diagnostics.json'), 'utf8')),
+  compare: JSON.parse(readFileSync(join(fixturesDir, 'compare.json'), 'utf8')),
   health: JSON.parse(readFileSync(join(fixturesDir, 'health.json'), 'utf8')),
 }
 let runsMode = 'normal'
 let healthMode = 'normal'
 let clientExecMode = 'normal'
+let compareMode = 'normal'
 /* 空令牌（未知）：DESIGN §8.6A 定稿——客户端不当成 expect 参与比较。 */
 let tokenOverride = null
 const WRITE_COMMANDS = ['ask', 'confirm', 'override', 'auto', 'step', 'tell']
@@ -231,6 +234,16 @@ async function fakeFetch(input, init) {
   }
   if (path.startsWith('/condopt/api/studies')) return responseOf(runsMode === 'empty' ? { root: '', runs: [] } : FIX.studies)
   if (path.startsWith('/condopt/api/diagnostics')) return responseOf(FIX.diagnostics)
+  if (path.startsWith('/condopt/api/compare')) {
+    if (compareMode === 'fail') throw new Error('fixture: compare unavailable')
+    let requested = []
+    try {
+      const query = path.includes('?') ? path.slice(path.indexOf('?') + 1) : ''
+      requested = decodeURIComponent(new URLSearchParams(query).get('runs') || '').split(',').map((s) => s.trim()).filter(Boolean)
+    } catch { requested = [] }
+    const selected = FIX.compare.runs.filter((run) => requested.some((id) => id === run.id || id === run.rel || `runs/${run.id}` === id))
+    return responseOf({ ok: true, runs: selected.length > 0 ? selected : FIX.compare.runs, warnings: FIX.compare.warnings })
+  }
   if (path.startsWith('/condopt/api/spec')) return responseOf(FIX.spec)
   if (path.startsWith('/condopt/api/view')) return responseOf(FIX.view)
   if (path.startsWith('/condopt/api/study')) return responseOf(tokenOverride === null ? FIX.study : { ...FIX.study, stateToken: tokenOverride, current: FIX.study.current })
@@ -260,7 +273,7 @@ const fakeWindow = {
   cancelAnimationFrame(id) { fakeWindow.clearTimeout(id) },
   addEventListener: addWindowListener,
   removeEventListener: removeWindowListener,
-  navigator: { clipboard: { writeText: async () => {} }, userAgent: 'dsh-verify-client' },
+  navigator: { clipboard: { writeText: async (text) => { clipboardWrites.push(String(text)) } }, userAgent: 'dsh-verify-client' },
   location: { origin: 'http://127.0.0.1:59280', href: 'http://127.0.0.1:59280/', protocol: 'http:', host: '127.0.0.1:59280', pathname: '/' },
   fetch: fakeFetch,
   getComputedStyle() { return { getPropertyValue: () => '' } },
@@ -1284,6 +1297,215 @@ group('v3.0 client.js 不再使用 attachShadow（DESIGN §8.7 I/J）')
   const occurrences = (source.match(/attachShadow/g) || []).length
   check('client.js 源码不含 attachShadow', occurrences === 0, '0 处', `${occurrences} 处`)
 }
+
+/* ------------------------------------------------------------------ v3.0 第二波：草稿卡 / 对比页（DESIGN §8.8 K/L/M） */
+
+/* 草稿卡断言放在对比页之后执行：草稿卡会写模块级交接通道并切换 pane（预填到参数页），
+   对比页需要干净的挂载态。T11 已把交接改成「消费一次即清」，这里保留顺序只是让两组互不干扰；
+   交接的一次性行为由本组末尾的「卸载重挂」断言单独覆盖。 */
+async function draftCardGroup() {
+group('v3.0 第二波 condopt_draft 工具卡（DESIGN §8.8 K/M）')
+
+{
+  const t = (key, params) => translate('condopt', key, params)
+  const draftReg = slotsRegistrations.find((entry) => entry.options && entry.options.name === 'tool.call.toolview' && entry.options.key === 'condopt_draft')
+  check('tool.call.toolview 登记 condopt_draft', draftReg !== undefined, "key='condopt_draft'", JSON.stringify(slotsRegistrations.filter((r) => r.options && r.options.name === 'tool.call.toolview').map((r) => r.options.key)))
+  if (draftReg !== undefined) {
+    check('condopt_view 卡仍在（v3.0 不删）', slotsRegistrations.some((entry) => entry.options && entry.options.key === 'condopt_view'), "key='condopt_view'", '—')
+    const draftText = '{"id":"r1-1","y":52.5}\n{"id":"r1-2","y":61.0}\n'
+    const draftResult = {
+      kind: 'tell',
+      run: 'demo',
+      root: '<condopt-root>',
+      payload: { command: 'tell', params: { resultsText: draftText }, expect: String(FIX.study.stateToken) },
+      preview: { rows: 2, format: 'jsonl', pendingCount: 2 },
+      warnings: ['示例 warning'],
+      text: '# 草稿：回填结果\n- run: runs/demo\n需要你在面板里确认后才会执行。',
+    }
+    const args = { root: draftResult.root, run: 'demo', kind: 'tell', resultsText: draftText }
+    const block = { args, call: { id: 'call-draft', state: 'result', args, result: draftResult, error: null }, result: draftResult, content: [{ type: 'text', text: draftResult.text }] }
+    resetAllHooks()
+    let toolHtml = ''
+    let toolError = null
+    try { toolHtml = render(React.createElement(draftReg.component, { t, block, call: block.call, args, value: draftResult, phase: 'result' })) } catch (err) { toolError = err }
+    check('condopt_draft 卡渲染不抛', toolError === null, '不抛', toolError ? String(toolError && toolError.stack) : 'ok')
+
+    /* 点「在面板中打开并预填」→ 面板预填 tell textarea，且零 POST /api/exec */
+    const tree = (() => {
+      const out = []
+      const walk = (node) => {
+        if (node === null || node === undefined) return
+        if (Array.isArray(node)) { for (const item of node) walk(item); return }
+        if (typeof node === 'string' || typeof node === 'number') return
+        if (typeof node.type === 'function') {
+          const prev = beginComponent(node.type)
+          try { walk(node.type({ ...node.props, children: node.children })) } catch { /* 尽力而为 */ } finally { endComponent(prev) }
+          return
+        }
+        out.push({ type: node.type, props: node.props || {}, children: node.children || [] })
+        walk(node.children)
+      }
+      for (let round = 0; round < 3; round += 1) {
+        out.length = 0
+        walk(React.createElement(draftReg.component, { ...(block.result ? {} : {}), t, block, call: block.call, args, value: draftResult, phase: 'result' }))
+        if (out.some((n) => n.type === 'button')) break
+      }
+      return out
+    })()
+    const prefillButton = tree.find((n) => n.type === 'button' && typeof n.props.onClick === 'function' && /预填|面板/.test(textOf(n.children)))
+    check('草稿卡有「在面板中打开并预填」按钮', prefillButton !== undefined, 'button 预填/面板', JSON.stringify(tree.filter((n) => n.type === 'button').map((b) => textOf(b.children))))
+    if (prefillButton !== undefined) {
+      fetchCalls.length = 0
+      clipboardWrites.length = 0
+      try { await prefillButton.props.onClick({ preventDefault() {}, stopPropagation() {}, target: {} }) } catch { /* 忽略 */ }
+      await settle(6)
+      const posts = fetchCalls.filter((c) => c.method === 'POST' && c.url.includes('/condopt/api/exec'))
+      check('预填不产生任何 POST /api/exec（仍要用户确认）', posts.length === 0, '0 个 POST', JSON.stringify(posts.map((c) => c.url)))
+
+      /* 挂载面板 → 参数页 → tell textarea 已预填 */
+      resetAllHooks()
+      for (let i = 0; i < 2; i += 1) { renderPanel(); try { flushEffects() } catch { /* 忽略 */ } await settle(6) }
+      const panelTree = buildTree(React.createElement(panelReg.component, { t }))
+      const paramsTab = panelTree.find((n) => n.type === 'button' && typeof n.props.onClick === 'function' && textOf(n.children).includes(translate('condopt', 'subtab.params')))
+      if (paramsTab) { try { await paramsTab.props.onClick({ preventDefault() {}, stopPropagation() {}, target: {} }) } catch { /* 忽略 */ } }
+      await settle(6)
+      for (let i = 0; i < 2; i += 1) { renderPanel(); try { flushEffects() } catch { /* 忽略 */ } await settle(6) }
+      const tree2 = buildTree(React.createElement(panelReg.component, { t }))
+      const prefilled = tree2.find((n) => n.type === 'textarea' && String(n.props.value || '') === draftText)
+      check('tell 草稿被预填进参数页 textarea', prefilled !== undefined, 'textarea.value === 草稿原文', JSON.stringify(tree2.filter((n) => n.type === 'textarea').map((n) => String(n.props.value || '').slice(0, 40))))
+      const posts2 = fetchCalls.filter((c) => c.method === 'POST' && c.url.includes('/condopt/api/exec'))
+      check('预填后面板仍未自动 POST /api/exec', posts2.length === 0, '0 个 POST', JSON.stringify(posts2.map((c) => c.url)))
+
+      /* 卸载重挂：交接**消费一次即清**（DESIGN §8.8K + 实现修复） ——
+         回默认「摘要」页、表单不被二次覆盖、仍选中交接的 study、仍零 POST。 */
+      fetchCalls.length = 0
+      resetAllHooks()
+      for (let i = 0; i < 2; i += 1) { renderPanel(); try { flushEffects() } catch { /* 忽略 */ } await settle(6) }
+      const remounted = buildTree(React.createElement(panelReg.component, { t }))
+      const subtabButtons = remounted.filter((n) => n.type === 'button' && /dco-subtab/.test(String(n.props.className || '')))
+      const activeTab = subtabButtons.find((n) => /dco-on/.test(String(n.props.className || '')))
+      const summaryLabel = translate('condopt', 'subtab.summary')
+      check('重挂后回到默认「摘要」页（草稿不再抢 pane）', activeTab !== undefined && textOf(activeTab.children).includes(summaryLabel), `active=${summaryLabel}`, JSON.stringify(subtabButtons.map((b) => [textOf(b.children), /dco-on/.test(String(b.props.className || ''))])))
+      const stillPrefilled = remounted.find((n) => n.type === 'textarea' && String(n.props.value || '') === draftText)
+      check('重挂后表单不被二次覆盖（无预填值）', stillPrefilled === undefined, '无 textarea 等于草稿原文', JSON.stringify(remounted.filter((n) => n.type === 'textarea').map((n) => String(n.props.value || '').slice(0, 30))))
+      const studyCalls = fetchCalls.filter((c) => c.url.includes('/condopt/api/study')).map((c) => c.url)
+      check('重挂后仍选中交接的 study（demo）', studyCalls.some((u) => u.includes('demo') && !u.includes('demo_moo')), 'study?run=*demo*', JSON.stringify(studyCalls.slice(0, 5)))
+      const posts3 = fetchCalls.filter((c) => c.method === 'POST' && c.url.includes('/condopt/api/exec'))
+      check('重挂后仍零 POST /api/exec', posts3.length === 0, '0 个 POST', JSON.stringify(posts3.map((c) => c.url)))
+    }
+  }
+}
+}
+
+group('v3.0 第二波 对比页（DESIGN §8.8 L/M）')
+
+if (typeof panelReg !== 'undefined' && panelReg && typeof panelReg.component === 'function') {
+  const t = (key, params) => translate('condopt', key, params)
+  const zhStrings = (() => {
+    const entry = localeDictionaries.find((e) => e.namespace === 'condopt')
+    return entry && entry.dicts && entry.dicts.zh ? flattenValues(entry.dicts.zh) : []
+  })()
+  const loc = (key, pattern) => {
+    const value = translate('condopt', key)
+    if (value !== key && value !== '') return value
+    return zhStrings.find((s) => new RegExp(pattern).test(s)) || key
+  }
+  const compareLabel = loc('subtab.compare', '^对比$')
+
+  /* 成功路径：选 2 个 run → 恰好 1 次 /api/compare + 表格 + SVG + warnings + 复制 Markdown */
+  resetAllHooks()
+  for (let i = 0; i < 2; i += 1) { renderPanel(); try { flushEffects() } catch { /* 忽略 */ } await settle(6) }
+  const tabTree = buildTree(React.createElement(panelReg.component, t))
+  const compareTab = tabTree.find((n) => n.type === 'button' && typeof n.props.onClick === 'function' && textOf(n.children).includes(compareLabel))
+  check('摘要/视图等页之后有「对比」子页签', compareTab !== undefined, `button「${compareLabel}」`, JSON.stringify(tabTree.filter((n) => n.type === 'button').map((b) => textOf(b.children)).slice(0, 10)))
+  if (compareTab) { try { await compareTab.props.onClick({ preventDefault() {}, stopPropagation() {}, target: {} }) } catch { /* 忽略 */ } }
+  await settle(6)
+  for (let i = 0; i < 2; i += 1) { renderPanel(); try { flushEffects() } catch { /* 忽略 */ } await settle(6) }
+  const compareTitle = loc('compare.title', '对比')
+  check('切到对比页后渲染对比块', renderPanel().html.includes(compareTitle), `含「${compareTitle}」`, renderPanel().html.slice(0, 200))
+
+  fetchCalls.length = 0
+  clipboardWrites.length = 0
+  const boxesNow = () => {
+    const all = buildTree(React.createElement(panelReg.component, t)).filter((n) => n.type === 'input' && n.props && n.props.type === 'checkbox' && typeof n.props.onChange === 'function')
+    const paneBoxes = all.filter((n) => /dco-check/.test(String(n.props.className || '')))
+    return paneBoxes.length >= 2 ? paneBoxes : all
+  }
+  check('对比页有 run 多选（checkbox）', boxesNow().length >= 2, '≥2 个 checkbox', String(boxesNow().length))
+  /* fixtures 只有 2 个 study：逐个勾选。每次**重建树**再勾下一个——onChange 闭包会捕获旧的
+     compareRuns，用同一棵树连勾两个只会把同一个 run 选两次（离线 harness 的状态模型）。 */
+  for (let index = 0; index < 2; index += 1) {
+    const box = boxesNow()[index]
+    if (box === undefined) break
+    try { box.props.onChange({ target: { checked: true, value: String(box.props.value || '') } }) } catch { /* 忽略 */ }
+    await settle(6)
+  }
+  await new Promise((r) => setTimeout(r, 400))
+  await settle(8)
+  /* 若实现要求显式点「刷新对比」，补一次点击（选择阶段没发请求才算）。 */
+  if (fetchCalls.filter((c) => c.url.includes('/condopt/api/compare')).length === 0) {
+    const tree2 = buildTree(React.createElement(panelReg.component, t))
+    const runButton = tree2.find((n) => n.type === 'button' && typeof n.props.onClick === 'function' && n.props.disabled !== true && /比较|对比|compare|刷新/i.test(textOf(n.children)) && textOf(n.children) !== compareLabel)
+    if (runButton) { try { await runButton.props.onClick({ preventDefault() {}, stopPropagation() {}, target: {} }) } catch { /* 忽略 */ } }
+    await new Promise((r) => setTimeout(r, 400))
+  }
+  await settle(8)
+  for (let i = 0; i < 2; i += 1) { renderPanel(); try { flushEffects() } catch { /* 忽略 */ } await settle(6) }
+
+  const compareCalls = fetchCalls.filter((c) => c.url.includes('/condopt/api/compare'))
+  check('选中 2 个 run → 恰好 1 次 /api/compare', compareCalls.length === 1, '1 次', `${compareCalls.length} 次：${JSON.stringify(compareCalls.map((c) => c.url))}`)
+  check('compare 请求带 2 个 run（runs=…）', compareCalls.length === 1 && /runs=/.test(compareCalls[0].url) && FIX.compare.runs.slice(0, 2).every((run) => compareCalls[0].url.includes(run.id.split('_')[0])), 'runs= 两个 id', JSON.stringify(compareCalls.map((c) => c.url)))
+
+  const resultTree = buildTree(React.createElement(panelReg.component, t))
+  check('对比页渲染表格（table/thead/tr）', resultTree.some((n) => ['table', 'thead', 'tbody', 'tr', 'td', 'th'].includes(String(n.type))), '表格元素', JSON.stringify([...new Set(resultTree.map((n) => String(n.type)))].slice(0, 20)))
+  check('对比页渲染 SVG 折线', resultTree.some((n) => ['svg', 'polyline', 'path', 'line'].includes(String(n.type))), 'svg 元素', JSON.stringify([...new Set(resultTree.map((n) => String(n.type)))].filter((x) => /svg|line|path/i.test(x))))
+  const compareHtml = renderPanel().html
+  check('对比页显示 warnings（fixture 原文）', compareHtml.includes('pending.json 有 2 条待回填'), 'warnings 原文', compareHtml.slice(0, 240))
+
+  {
+    const copyButton = resultTree.find((n) => n.type === 'button' && typeof n.props.onClick === 'function' && /复制|Markdown/i.test(textOf(n.children)))
+    check('对比页有「复制对比 Markdown」按钮', copyButton !== undefined, 'button 复制 Markdown', JSON.stringify(resultTree.filter((n) => n.type === 'button').map((b) => textOf(b.children)).slice(0, 12)))
+    if (copyButton) { try { await copyButton.props.onClick({ preventDefault() {}, stopPropagation() {}, target: {} }) } catch { /* 忽略 */ } ; await settle(6) }
+    const copied = clipboardWrites.join('\n')
+    check('复制的 Markdown 含两个 run 与表头', copied.includes('demo_moo') && copied.includes('demo') && /算法|algorithm|预算|best/i.test(copied), '两 run + 表头', copied.slice(0, 240))
+  }
+
+  /* 失败态：compare 请求抛错 → 有错误文案，不抛 */
+  resetAllHooks()
+  compareMode = 'fail'
+  for (let i = 0; i < 2; i += 1) { renderPanel(); try { flushEffects() } catch { /* 忽略 */ } await settle(5) }
+  {
+    const tabTree2 = buildTree(React.createElement(panelReg.component, t))
+    const tab2 = tabTree2.find((n) => n.type === 'button' && typeof n.props.onClick === 'function' && textOf(n.children).includes(compareLabel))
+    if (tab2) { try { await tab2.props.onClick({ preventDefault() {}, stopPropagation() {}, target: {} }) } catch { /* 忽略 */ } }
+  }
+  await settle(6)
+  for (let i = 0; i < 2; i += 1) { renderPanel(); try { flushEffects() } catch { /* 忽略 */ } await settle(6) }
+  const failTree = buildTree(React.createElement(panelReg.component, t))
+  void failTree
+  for (let index = 0; index < 2; index += 1) {
+    const all = buildTree(React.createElement(panelReg.component, t)).filter((n) => n.type === 'input' && n.props && n.props.type === 'checkbox' && typeof n.props.onChange === 'function')
+    const paneBoxes = all.filter((n) => /dco-check/.test(String(n.props.className || '')))
+    const box = (paneBoxes.length >= 2 ? paneBoxes : all)[index]
+    if (box === undefined) break
+    try { box.props.onChange({ target: { checked: true } }) } catch { /* 忽略 */ }
+    await settle(6)
+  }
+  await new Promise((r) => setTimeout(r, 400))
+  if (fetchCalls.filter((c) => c.url.includes('/condopt/api/compare')).length === 0) {
+    const t2 = buildTree(React.createElement(panelReg.component, t))
+    const runButton = t2.find((n) => n.type === 'button' && typeof n.props.onClick === 'function' && n.props.disabled !== true && /比较|对比|compare|刷新/i.test(textOf(n.children)) && textOf(n.children) !== compareLabel)
+    if (runButton) { try { await runButton.props.onClick({ preventDefault() {}, stopPropagation() {}, target: {} }) } catch { /* 忽略 */ } }
+    await new Promise((r) => setTimeout(r, 400))
+  }
+  await settle(6)
+  for (let i = 0; i < 2; i += 1) { renderPanel(); try { flushEffects() } catch { /* 忽略 */ } await settle(5) }
+  const failHtml = renderPanel().html
+  check('compare 失败态有错误文案（不抛）', /失败|错误|重试|unavailable|compare/i.test(failHtml), '错误文案', failHtml.slice(0, 200))
+  compareMode = 'normal'
+}
+
+await draftCardGroup()
 
 /* ------------------------------------------------------------------ 卸载 / 清理 */
 

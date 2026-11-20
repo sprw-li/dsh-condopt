@@ -644,7 +644,7 @@ group('apply 激活期惰性（cordis without-inject 回归）')
   const a = mk((name) => { calls.push(name); return undefined })
   let threw = null
   try { await mod.apply(a.ctx, {}) } catch (err) { threw = err }
-  check('apply 不抛（无属性式服务访问）', threw === null && a.reg.routes.length === 1 && a.reg.tools.length === 1, '1 路由 + 1 工具', threw ? `throw ${threw.message}` : `routes=${a.reg.routes.length} tools=${a.reg.tools.length}`)
+  check('apply 不抛（无属性式服务访问）', threw === null && a.reg.routes.length === 1 && a.reg.tools.length === 2, '1 路由 + 2 工具（condopt_view/condopt_draft）', threw ? `throw ${threw.message}` : `routes=${a.reg.routes.length} tools=${a.reg.tools.length}`)
   check('激活期不读取可选服务（惰性）', calls.length === 0, 'ctx.get 调用 0 次', JSON.stringify(calls))
 
   const b = mk(() => { throw new Error('cannot get property "agents" without inject') })
@@ -1172,6 +1172,228 @@ if (!hasRealRoot) {
   }
 }
 
+/* ------------------------------------------------------------------ 9c. v3.0 第二波（DESIGN §8.8 K/L/M） */
+
+/* 沙箱里 <root>/runs 不可写：真写入类断言统一降级为 SKIP（可写环境会真跑）。这里先探测一次。 */
+const writeBlocked = !hasRealRoot ? true : !(await probeWrite(join(repoRoot, 'runs', '__dsh_verify_probe__')))
+if (writeBlocked && hasRealRoot) note('本会话沙箱不允许在 <root>/runs 下创建目录 → 真写入类断言降级为 SKIP（可写环境会真跑）')
+
+group('v3.0 /api/compare（DESIGN §8.8 L/M）')
+
+if (!hasRealRoot) {
+  skip('v3.0 /api/compare 真数据断言', NO_ROOT_REASON)
+} else if (!handler) {
+  note('handler 不可用，跳过 /api/compare')
+} else {
+  const demoDir = join(repoRoot, 'runs', 'demo')
+  const demoMooDir = join(repoRoot, 'runs', 'demo_moo')
+  const compareRuns = ['demo', 'demo_moo']
+
+  /* runs 数量越界 → 400（不依赖具体 run 是否存在） */
+  for (const [label, query] of [
+    ['缺 runs 参数', '/condopt/api/compare'],
+    ['只有 1 个 run', '/condopt/api/compare?runs=demo'],
+    ['9 个 run', `/condopt/api/compare?runs=${Array.from({ length: 9 }, () => 'demo').join(',')}`],
+  ]) {
+    const r = await thrownAsync(() => call(handler, { url: query }))
+    check(`compare ${label} → 400 bad-param`, !r.threw && r.value.status === 400 && r.value.json && r.value.json.code === 'bad-param', "400 {code:'bad-param'}", r.threw ? 'throw' : `${r.value.status} ${JSON.stringify(r.value.json).slice(0, 120)}`)
+  }
+
+  if (!existsSync(join(demoDir, 'dataset.jsonl')) || !existsSync(join(demoMooDir, 'problem.json'))) {
+    note('runs/demo 或 runs/demo_moo 不存在，跳过 compare 真数据断言')
+  } else {
+    const beforeDemo = await snapshotDir(demoDir)
+    const beforeMoo = await snapshotDir(demoMooDir)
+    const r = await thrownAsync(() => call(handler, { url: `/condopt/api/compare?runs=${compareRuns.join(',')}` }))
+    const afterDemo = await snapshotDir(demoDir)
+    const afterMoo = await snapshotDir(demoMooDir)
+    if (r.threw) fail('GET /api/compare', '200 JSON', `throw ${r.err && r.err.message}`)
+    else {
+      const body = r.value.json || {}
+      check('GET /api/compare → 200', r.value.status === 200, '200', `${r.value.status} ${r.value.body.slice(0, 140)}`)
+      check('compare.ok === true', body.ok === true, 'true', JSON.stringify(body.ok))
+      const runs = Array.isArray(body.runs) ? body.runs : []
+      check('compare.runs 长度 = 请求的 2 个', runs.length === 2, '2', String(runs.length))
+      const KEYS = ['id', 'rel', 'algorithm', 'objective', 'direction', 'budget', 'nObservations', 'pendingCount', 'best', 'stateToken', 'series']
+      const shapeOk = runs.every((item) => item && KEYS.every((k) => k in item) && Array.isArray(item.series) && item.series.every((p) => p && typeof p.t === 'number' && typeof p.best === 'number'))
+      check('compare.runs 每项含 11 个约定字段且 series 是 {t,best}', shapeOk, KEYS.join(','), JSON.stringify(runs.map((item) => item && Object.keys(item))).slice(0, 220))
+      check('compare.warnings 是数组', Array.isArray(body.warnings), '[]', JSON.stringify(body.warnings))
+
+      /* 逐点核对 best-so-far（独立读 dataset.jsonl + problem.json 的 direction） */
+      const problem = JSON.parse(await readFile(join(demoDir, 'problem.json'), 'utf8'))
+      const direction = problem.objective && problem.objective.direction === 'min' ? 'min' : 'max'
+      const datasetText = await readFile(join(demoDir, 'dataset.jsonl'), 'utf8')
+      const ys = datasetText.split(/\r?\n/).filter((line) => line.trim() !== '').map((line) => JSON.parse(line)).map((row) => Number(row.y)).filter((v) => Number.isFinite(v))
+      const expected = []
+      let running = null
+      for (const y of ys) {
+        running = running === null ? y : (direction === 'max' ? Math.max(running, y) : Math.min(running, y))
+        expected.push(running)
+      }
+      const demoEntry = runs.find((item) => item && item.id === 'demo')
+      check('compare run.direction 与 problem.json 一致', demoEntry !== undefined && demoEntry.direction === direction, direction, String(demoEntry && demoEntry.direction))
+      const series = demoEntry ? demoEntry.series : []
+      check('series 点数 = dataset 行数（≤400 不降采样）', series.length === expected.length && expected.length > 0, String(expected.length), String(series.length))
+      const bestMismatch = expected.findIndex((value, index) => !series[index] || Math.abs(series[index].best - value) > 1e-9)
+      check('series 逐点 = 独立计算的 best-so-far', bestMismatch === -1, '全部一致', bestMismatch === -1 ? 'ok' : `第 ${bestMismatch} 点 series=${series[bestMismatch] && series[bestMismatch].best} expected=${expected[bestMismatch]}`)
+      const monotonic = series.every((point, index) => index === 0 || (direction === 'max' ? point.best >= series[index - 1].best - 1e-9 : point.best <= series[index - 1].best + 1e-9))
+      check('series 与 direction 单调一致', monotonic, `${direction} 单调`, JSON.stringify(series.slice(0, 5)))
+      check('run.best = series 末点', demoEntry !== undefined && series.length > 0 && Math.abs(demoEntry.best - series[series.length - 1].best) < 1e-9, String(series.length > 0 ? series[series.length - 1].best : 'n/a'), String(demoEntry && demoEntry.best))
+
+      /* 缺文件 run：省略 + warning，仍 200 */
+      const missing = await thrownAsync(() => call(handler, { url: '/condopt/api/compare?runs=demo,__dsh_verify_missing__' }))
+      if (missing.threw) fail('compare 含不存在 run → 200 + warning', '200', `throw ${missing.err && missing.err.message}`)
+      else {
+        const body2 = missing.value.json || {}
+        const ids = Array.isArray(body2.runs) ? body2.runs.map((item) => item && item.id) : []
+        check('不存在的 run 被省略（仍 200）', missing.value.status === 200 && ids.includes('demo') && !ids.includes('__dsh_verify_missing__'), "200 且 runs 只剩 demo", `${missing.value.status} ids=${JSON.stringify(ids)}`)
+        check('不存在的 run 记 warning', Array.isArray(body2.warnings) && body2.warnings.length > 0, '≥1 条 warning', JSON.stringify(body2.warnings))
+      }
+    }
+    check('/api/compare 零写入 run 目录', diffSnapshots(beforeDemo, afterDemo).length === 0 && diffSnapshots(beforeMoo, afterMoo).length === 0, '两个 run 目录无新增/无 mtime 变化', [...diffSnapshots(beforeDemo, afterDemo), ...diffSnapshots(beforeMoo, afterMoo)].join('; ') || '干净')
+
+    /* 零 spawn：注入记录型 spawn，compare 一次都不该调用 */
+    const argvCalls = []
+    const recorder = (prog, args) => {
+      argvCalls.push(Array.isArray(args) ? args.join(' ') : String(args))
+      return Promise.resolve({ ok: true, code: 0, stdout: '', stderr: '', timedOut: false })
+    }
+    const res = thrown(() => mod.createHandler({ ...deps, spawnImpl: recorder }))
+    if (res.threw) fail('compare handler（记录型 spawn）创建', '(req,res)=>Promise', `throw ${res.err && res.err.message}`)
+    else {
+      const rr = await thrownAsync(() => call(res.value, { url: `/condopt/api/compare?runs=${compareRuns.join(',')}` }))
+      check('/api/compare 零 spawn（不调 CLI）', !rr.threw && argvCalls.length === 0, '0 次 spawn', JSON.stringify(argvCalls))
+    }
+
+    /* >400 点：等距降采样 + warning（需要能造一个 500 行的大 run） */
+    const bigName = '__dsh_verify_big__'
+    const bigDir = join(repoRoot, 'runs', bigName)
+    if (writeBlocked) {
+      skip('compare >400 点降采样', '需要在 <root>/runs 下造一个 500 行 dataset 的 run；沙箱不可写（可写环境会真跑）')
+    } else {
+      try {
+        await mkdir(bigDir, { recursive: true })
+        await cp(join(demoDir, 'problem.json'), join(bigDir, 'problem.json'))
+        if (existsSync(join(demoDir, 'config.json'))) await cp(join(demoDir, 'config.json'), join(bigDir, 'config.json'))
+        const lines = []
+        for (let i = 0; i < 500; i += 1) lines.push(JSON.stringify({ x: { T: 40 + i % 80 }, y: 50 + (i % 40), t: i + 1, source: 'simulation' }))
+        await writeFile(join(bigDir, 'dataset.jsonl'), lines.join('\n') + '\n')
+        const rr = await thrownAsync(() => call(handler, { url: `/condopt/api/compare?runs=demo,${bigName}` }))
+        if (rr.threw) fail('compare >400 点降采样', '200 + 降采样 warning', `throw ${rr.err && rr.err.message}`)
+        else {
+          const body3 = rr.value.json || {}
+          const big = (body3.runs || []).find((item) => item && item.id === bigName)
+          check('compare >400 点 → series 点数 ≤ 400', big !== undefined && big.series.length <= 400 && big.series.length > 1, '≤400', String(big && big.series.length))
+          check('compare >400 点 → warnings 注明降采样', Array.isArray(body3.warnings) && body3.warnings.some((w) => /降采样|采样|downsampl/i.test(w)), '降采样 warning', JSON.stringify(body3.warnings))
+        }
+      } catch (err) {
+        fail('compare >400 点降采样准备', '可写 run 副本', `throw ${err && err.message}`)
+      } finally {
+        await rm(bigDir, { recursive: true, force: true }).catch(() => {})
+      }
+    }
+  }
+}
+
+group('v3.0 condopt_draft 草稿工具（DESIGN §8.8 K/M）')
+
+if (!hasRealRoot) {
+  skip('v3.0 condopt_draft 断言', NO_ROOT_REASON)
+} else {
+  /* 经 apply 拿到真实工具实例（只注册、不激活服务）。 */
+  const draftTools = []
+  const applyCtx = {
+    effect(fn) { const cleanup = fn(); return typeof cleanup === 'function' ? cleanup : () => {} },
+    get() { return undefined },
+    webServer: { register() { return () => {} } },
+    tools: { register(tool) { draftTools.push(tool); return () => {} } },
+  }
+  const applied = await thrownAsync(async () => mod.apply(applyCtx, { projectRoot: repoRoot }))
+  if (applied.threw) fail('apply（draft 注册）', '不抛', `throw ${applied.err && applied.err.message}`)
+  const draft = draftTools.find((tool) => tool && tool.name === 'condopt_draft')
+  check('注册 condopt_draft（只读草稿工具）', draft !== undefined, 'name=condopt_draft', JSON.stringify(draftTools.map((t) => t && t.name)))
+  if (draft !== undefined) {
+    check('condopt_draft isConcurrencySafe() === true', typeof draft.isConcurrencySafe === 'function' && draft.isConcurrencySafe() === true, 'true', String(draft.isConcurrencySafe && draft.isConcurrencySafe()))
+    const kindEnum = draft.parameters && draft.parameters.properties && draft.parameters.properties.kind && draft.parameters.properties.kind.enum
+    check('kind 枚举 = ask/tell/override', Array.isArray(kindEnum) && ['ask', 'tell', 'override'].every((k) => kindEnum.includes(k)) && kindEnum.length === 3, '[ask,tell,override]', JSON.stringify(kindEnum))
+
+    const demoDir = join(repoRoot, 'runs', 'demo')
+    const flow2Dir = join(repoRoot, 'runs', 'flow2')
+    const tokenOf = (dir) => mod.stateToken(dir)
+    const runDraft = async (args) => {
+      const res = await thrownAsync(async () => draft.execute({ root: repoRoot, ...args }, {}))
+      return res
+    }
+    const beforeDemo = await snapshotDir(demoDir)
+    const beforeFlow2 = await snapshotDir(flow2Dir)
+
+    const demoToken = tokenOf(demoDir)
+    /* ask */
+    {
+      const res = await runDraft({ run: 'demo', kind: 'ask', n: 3, plate: 'P2' })
+      if (res.threw) fail('condopt_draft ask', '返回值', `throw ${res.err && res.err.message}`)
+      else {
+        const value = res.value || {}
+        check('draft ask payload.command === ask', value.payload && value.payload.command === 'ask', 'ask', JSON.stringify(value.payload))
+        check('draft ask payload.params.n/plate 精确', value.payload && value.payload.params && value.payload.params.n === 3 && value.payload.params.plate === 'P2', '{n:3, plate:P2}', JSON.stringify(value.payload && value.payload.params))
+        check('draft ask payload.expect = 当前 stateToken', value.payload && value.payload.expect === demoToken, demoToken, String(value.payload && value.payload.expect))
+        check('draft ask 的 params 内不含 expect', value.payload && value.payload.params && !('expect' in value.payload.params), 'params 无 expect', JSON.stringify(value.payload && value.payload.params))
+        check('draft ask warnings 是数组 / text 紧凑 Markdown', Array.isArray(value.warnings) && typeof value.text === 'string' && value.text.length > 0 && !value.text.includes('<!doctype') && !/<style[\s>]/i.test(value.text), 'warnings[] + 紧凑 text', JSON.stringify({ warnings: value.warnings, len: typeof value.text === 'string' ? value.text.length : null }))
+        check('draft ask text 提到 run 与「确认」', typeof value.text === 'string' && value.text.includes('demo') && /确认/.test(value.text), '含 run 名 + 确认', typeof value.text === 'string' ? value.text.slice(0, 160) : '')
+      }
+    }
+    /* tell：合法 id（flow2 的 pending）与不在 pending 的 id */
+    {
+      const pendingIds = await readPendingIds(flow2Dir)
+      const bogus = JSON.stringify({ id: '__not_in_pending__', y: 1 })
+      const res = await runDraft({ run: 'flow2', kind: 'tell', resultsText: bogus })
+      if (res.threw) fail('condopt_draft tell', '返回值', `throw ${res.err && res.err.message}`)
+      else {
+        const value = res.value || {}
+        check('draft tell payload.command === tell 且 resultsText 原样', value.payload && value.payload.command === 'tell' && value.payload.params && value.payload.params.resultsText === bogus, 'tell + resultsText 原样', JSON.stringify(value.payload))
+        check('draft tell payload.expect = 当前令牌', value.payload && value.payload.expect === tokenOf(flow2Dir), tokenOf(flow2Dir), String(value.payload && value.payload.expect))
+        check('draft tell id 不在 pending → warning', Array.isArray(value.warnings) && value.warnings.some((w) => /pending|待回填|不在/.test(w)), 'pending warning', JSON.stringify(value.warnings))
+        check('draft tell preview 有 rows/format', value.preview && typeof value.preview.rows === 'number' && typeof value.preview.format === 'string', '{rows,format}', JSON.stringify(value.preview))
+        if (pendingIds.length > 0) note(`flow2 pending ids: ${JSON.stringify(pendingIds.slice(0, 3))}`)
+      }
+    }
+    /* tell：>5000 行 + 不可解析 */
+    {
+      const many = Array.from({ length: 5001 }, (_, i) => `{"id":"r${i}","y":${i}}`).join('\n')
+      const res = await runDraft({ run: 'demo', kind: 'tell', resultsText: many })
+      const value = res.threw ? {} : (res.value || {})
+      check('draft tell 行数 > 5000 → warning', !res.threw && Array.isArray(value.warnings) && value.warnings.some((w) => /5000|行数/.test(w)), '5000/行数 warning', res.threw ? `throw ${res.err.message}` : JSON.stringify(value.warnings))
+      const res2 = await runDraft({ run: 'demo', kind: 'tell', resultsText: 'not json at all' })
+      const value2 = res2.threw ? {} : (res2.value || {})
+      check('draft tell 不可解析 → warning', !res2.threw && Array.isArray(value2.warnings) && value2.warnings.some((w) => /解析|parse|格式/.test(w)), '解析 warning', res2.threw ? `throw ${res2.err.message}` : JSON.stringify(value2.warnings))
+    }
+    /* override：完整 / 缺 reason / 算法不在 spec */
+    {
+      const res = await runDraft({ run: 'demo', kind: 'override', algorithm: 'bayes', params: { kappa: 2.5 }, reason: '验收理由' })
+      if (res.threw) fail('condopt_draft override', '返回值', `throw ${res.err && res.err.message}`)
+      else {
+        const value = res.value || {}
+        check('draft override payload 精确（algorithm/params/reason + 顶层 expect）', value.payload && value.payload.command === 'override' && value.payload.params && value.payload.params.algorithm === 'bayes' && value.payload.params.params && value.payload.params.params.kappa === 2.5 && value.payload.params.reason === '验收理由' && value.payload.expect === tokenOf(demoDir) && !('expect' in value.payload.params), '{command,params:{algorithm,params,reason},expect}', JSON.stringify(value.payload))
+        check('draft override preview.changedFields 存在', value.preview && (Array.isArray(value.preview.changedFields) || value.preview.changedFields === undefined), 'changedFields', JSON.stringify(value.preview))
+      }
+      const noReason = await runDraft({ run: 'demo', kind: 'override', algorithm: 'bayes' })
+      const nrValue = noReason.threw ? {} : (noReason.value || {})
+      check('draft override 无 reason → warning', !noReason.threw && Array.isArray(nrValue.warnings) && nrValue.warnings.some((w) => /reason|理由/.test(w)), 'reason warning', noReason.threw ? `throw ${noReason.err.message}` : JSON.stringify(nrValue.warnings))
+      const badAlgo = await runDraft({ run: 'demo', kind: 'override', algorithm: '__not_an_algorithm__', reason: 'x' })
+      const baValue = badAlgo.threw ? {} : (badAlgo.value || {})
+      check('draft override 算法不在 spec → warning', !badAlgo.threw && Array.isArray(baValue.warnings) && baValue.warnings.some((w) => /spec|算法/.test(w)), 'spec warning', badAlgo.threw ? `throw ${badAlgo.err.message}` : JSON.stringify(baValue.warnings))
+    }
+    /* run 不存在 */
+    {
+      const res = await runDraft({ run: '__dsh_verify_missing__', kind: 'ask', n: 1 })
+      const value = res.threw ? {} : (res.value || {})
+      check('draft run 不存在 → warning（不抛）', !res.threw && Array.isArray(value.warnings) && value.warnings.length > 0, '≥1 warning', res.threw ? `throw ${res.err.message}` : JSON.stringify(value.warnings))
+    }
+
+    check('condopt_draft 调用前后 run 目录逐文件 mtime/size 不变（只读硬证明）', diffSnapshots(beforeDemo, await snapshotDir(demoDir)).length === 0 && diffSnapshots(beforeFlow2, await snapshotDir(flow2Dir)).length === 0, 'demo+flow2 无任何变化', [...diffSnapshots(beforeDemo, await snapshotDir(demoDir)), ...diffSnapshots(beforeFlow2, await snapshotDir(flow2Dir))].join('; ') || '干净')
+  }
+}
+
 /* ------------------------------------------------------------------ 10. renderView 真跑 */
 
 group('renderView（DESIGN §4 真实渲染 / 零写入）')
@@ -1344,9 +1566,6 @@ if (typeof mod.readCurrent === 'function') {
 }
 
 group('v2.0 expect 状态令牌（DESIGN §8.6A）')
-
-const writeBlocked = !hasRealRoot ? true : !(await probeWrite(join(repoRoot, 'runs', '__dsh_verify_probe__')))
-if (writeBlocked) note('本会话沙箱不允许在 <root>/runs 下创建目录 → 真写入类断言降级为 SKIP（请在非沙箱环境重跑取最终数）')
 
 if (!hasRealRoot) {
   skip('v2.0 expect 令牌六命令 409', NO_ROOT_REASON)

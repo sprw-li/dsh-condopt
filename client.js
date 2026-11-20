@@ -30,6 +30,10 @@ window.__ModuleLoader__.load({
     const AUTO_REFRESH_MS = 30000
     /** tell 回填的行数上限（DESIGN §8.6B：宿主 5000 行；这里只做预览期提示）。 */
     const MAX_TELL_ROWS = 5000
+    /** 对比页最多同时比较的 run 数（DESIGN §8.8L：2–8）。 */
+    const MAX_COMPARE_RUNS = 8
+    /** 对比折线的配色（固定顺序，保证同一 run 每次颜色一致）。 */
+    const COMPARE_COLORS = ['#2f6feb', '#e2554f', '#2e9e5b', '#c76b1f', '#8e5be0', '#0f9bb0', '#b3368c', '#6b7280']
 
     /* ------------------------------------------------------------------ *
      * locale 字典（zh / en 的 key 集合必须完全一致，harness 会断言）      *
@@ -272,6 +276,56 @@ window.__ModuleLoader__.load({
       'settings.formSaved': '已保存',
       'settings.formFailed': '保存失败：{message}',
       'settings.formReadonly': '当前表单不支持保存（缺少 mutate），仅显示现值。',
+      /* --- v3.0 第二波：condopt_draft 草稿卡 / 对比页 --- */
+      'draft.title': '条件优化草稿',
+      'draft.preparing': '正在准备草稿…',
+      'draft.kind': '类型',
+      'draft.kind.ask': '生成下一批',
+      'draft.kind.tell': '回填结果',
+      'draft.kind.override': '覆写算法',
+      'draft.payload': '将执行的请求',
+      'draft.command': '命令',
+      'draft.params': '参数',
+      'draft.expect': '令牌',
+      'draft.preview': '预览',
+      'draft.preview.rows': '行数',
+      'draft.preview.format': '形态',
+      'draft.preview.algorithm': '算法',
+      'draft.preview.changed': '改动字段',
+      'draft.preview.pending': '待回填',
+      'draft.warnings': '警告',
+      'draft.result': '草稿内容',
+      'draft.openPrefill': '在面板中打开并预填',
+      'draft.openHint': '把这份草稿预填到面板对应区块；仍然需要你在面板里点确认才会执行',
+      'draft.prefilled': '已把草稿预填到面板，请确认后执行',
+      'draft.noText': '（没有可显示的文本输出）',
+      'draft.failed': '失败',
+      'subtab.compare': '对比',
+      'compare.title': '跨 run 对比',
+      'compare.hint': '勾选 2–8 个 study（列表来自 /api/studies）；最小对比：表格 + best-so-far 折线。',
+      'compare.select': '选择 study',
+      'compare.tooFew': '至少勾选 2 个 study',
+      'compare.tooMany': '最多勾选 8 个 study',
+      'compare.reload': '重新对比',
+      'compare.loading': '正在对比…',
+      'compare.failed': '对比失败：{message}',
+      'compare.empty': '没有可对比的数据',
+      'compare.col.run': 'Study',
+      'compare.col.algorithm': '算法',
+      'compare.col.objective': '目标',
+      'compare.col.budget': '预算',
+      'compare.col.observations': '观测数',
+      'compare.col.pending': '待回填',
+      'compare.col.best': '最优',
+      'compare.col.token': '令牌',
+      'compare.chart': 'best-so-far 叠加折线',
+      'compare.chartEmpty': '这些 run 没有可画的序列',
+      'compare.legend': '图例',
+      'compare.warnings': '警告',
+      'compare.copyMd': '复制对比 Markdown',
+      'compare.axis.t': '步',
+      'compare.axis.best': 'best',
+      'compare.mdTitle': 'condopt 跨 run 对比',
     }
 
     const en = {
@@ -511,6 +565,56 @@ window.__ModuleLoader__.load({
       'settings.formSaved': 'Saved',
       'settings.formFailed': 'Save failed: {message}',
       'settings.formReadonly': 'This form cannot be saved (no mutate); showing current values only.',
+      /* --- v3.0 wave 2: condopt_draft card / compare pane --- */
+      'draft.title': 'Condopt draft',
+      'draft.preparing': 'Preparing the draft…',
+      'draft.kind': 'Kind',
+      'draft.kind.ask': 'Ask next batch',
+      'draft.kind.tell': 'Backfill results',
+      'draft.kind.override': 'Override algorithm',
+      'draft.payload': 'Request that would run',
+      'draft.command': 'Command',
+      'draft.params': 'Params',
+      'draft.expect': 'Token',
+      'draft.preview': 'Preview',
+      'draft.preview.rows': 'Rows',
+      'draft.preview.format': 'Format',
+      'draft.preview.algorithm': 'Algorithm',
+      'draft.preview.changed': 'Changed fields',
+      'draft.preview.pending': 'Pending',
+      'draft.warnings': 'Warnings',
+      'draft.result': 'Draft text',
+      'draft.openPrefill': 'Open in panel and prefill',
+      'draft.openHint': 'Prefill this draft into the panel; you still have to confirm there before anything runs',
+      'draft.prefilled': 'Draft prefilled into the panel — confirm there to run it',
+      'draft.noText': '(no text output)',
+      'draft.failed': 'failed',
+      'subtab.compare': 'Compare',
+      'compare.title': 'Cross-run comparison',
+      'compare.hint': 'Tick 2–8 studies (list from /api/studies); minimal compare: table + best-so-far lines.',
+      'compare.select': 'Select studies',
+      'compare.tooFew': 'Tick at least 2 studies',
+      'compare.tooMany': 'Tick at most 8 studies',
+      'compare.reload': 'Compare again',
+      'compare.loading': 'Comparing…',
+      'compare.failed': 'Comparison failed: {message}',
+      'compare.empty': 'No comparable data',
+      'compare.col.run': 'Study',
+      'compare.col.algorithm': 'Algorithm',
+      'compare.col.objective': 'Objective',
+      'compare.col.budget': 'Budget',
+      'compare.col.observations': 'Observations',
+      'compare.col.pending': 'Pending',
+      'compare.col.best': 'Best',
+      'compare.col.token': 'Token',
+      'compare.chart': 'best-so-far overlay',
+      'compare.chartEmpty': 'These runs have no drawable series',
+      'compare.legend': 'Legend',
+      'compare.warnings': 'Warnings',
+      'compare.copyMd': 'Copy comparison Markdown',
+      'compare.axis.t': 'step',
+      'compare.axis.best': 'best',
+      'compare.mdTitle': 'condopt cross-run comparison',
     }
 
     /** 模块级翻译函数；apply() 里用 ctx.locale.bind 覆盖成真实实现。 */
@@ -554,6 +658,8 @@ window.__ModuleLoader__.load({
 .dco-frame{display:block;width:100%;min-height:320px;max-height:70vh;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:#fff}
 .dco-settings{display:flex;flex-direction:column;gap:10px;max-width:820px;padding:4px 2px 10px}
 .dco-list{margin:0;padding-left:18px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.6}
+.dco-chart{display:block;width:100%;height:auto;max-height:320px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary)}
+.dco-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
 .dco-form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
 .dco-lbl{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--dsw-alias-label-secondary)}
 .dco-input{box-sizing:border-box;width:100%;height:26px;padding:0 7px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;outline:none}
@@ -989,6 +1095,159 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 工具返回值：`condopt_draft` 的 payload/preview/warnings/text 在**输出**里，
+     * 不在 args 里。不同 DSH 版本给的位置不同（block.call.output / block.call.result /
+     * block.value / props.value），这里按顺序找第一个长得像草稿的对象。
+     */
+    function draftValueOf(block, props) {
+      const candidates = []
+      if (isObject(block)) {
+        if (isObject(block.call)) {
+          candidates.push(block.call.output, block.call.result)
+        }
+        candidates.push(block.value, block.output, block.result)
+      }
+      if (isObject(props)) candidates.push(props.value, props.result, props.output)
+      for (const candidate of candidates) {
+        if (isObject(candidate) === false) continue
+        if (isObject(candidate.payload) || isObject(candidate.preview)
+          || Array.isArray(candidate.warnings) || typeof candidate.text === 'string') return candidate
+      }
+      return null
+    }
+
+    /** 草稿 kind → 本地化名称。 */
+    function draftKindLabel(kind, t) {
+      if (kind === 'ask' || kind === 'tell' || kind === 'override') return t(`draft.kind.${kind}`)
+      return t('params.unknown')
+    }
+
+    /**
+     * `condopt_draft` 的卡片（DESIGN §8.8K）。
+     *
+     * 渲染 payload / preview / warnings / text，并提供「在面板中打开并预填」：
+     * 只把草稿交回面板，**任何执行仍然要用户在面板里点确认**（本卡不发 exec）。
+     */
+    function CondoptDraftRow(props) {
+      const t = typeof props.t === 'function' ? props.t : tr
+      const phase = props.phase
+      const block = props.block
+      const args = toolArgsOf(block)
+
+      if (phase === 'preparing') {
+        return h('div', { className: 'dco-tool' },
+          h('div', { className: 'dco-tool-head' },
+            h('span', { 'aria-hidden': true }, '⚗'),
+            h('span', { className: 'dco-tool-title' }, t('draft.preparing')),
+          ),
+        )
+      }
+
+      const settled = isObject(block) && 'kind' in block
+      const error = isObject(block) && isObject(block.error) ? block.error : null
+      if (settled && (block.isError === true || error !== null)) {
+        const detail = [error !== null && typeof error.name === 'string' ? error.name : '',
+          error !== null && typeof error.code === 'string' ? error.code : ''].filter((part) => part !== '').join(' · ')
+        const content = Array.isArray(block.content) ? block.content.map(toolBlockText).filter((c) => c !== '').join('\n\n') : ''
+        const message = [detail, content].filter((part) => part !== '').join('\n')
+        return h('div', { className: 'dco-tool' },
+          h('div', { className: 'dco-tool-head' },
+            h('span', { 'aria-hidden': true }, '⚗'),
+            h('span', { className: 'dco-tool-title' }, t('draft.title')),
+            h('span', { className: 'dco-tool-chip' }, t('draft.failed')),
+          ),
+          h('div', { className: 'dco-err' }, message !== '' ? message : t('draft.failed')),
+        )
+      }
+
+      const value = draftValueOf(block, props) || {}
+      const kind = typeof value.kind === 'string' && value.kind !== ''
+        ? value.kind
+        : toolArgText(args, 'kind')
+      const study = typeof value.run === 'string' && value.run !== '' ? value.run : toolArgText(args, 'run')
+      const root = typeof value.root === 'string' && value.root !== '' ? value.root : toolArgText(args, 'root')
+      const payload = isObject(value.payload) ? value.payload : null
+      const preview = isObject(value.preview) ? value.preview : null
+      const warnings = Array.isArray(value.warnings) ? value.warnings.filter((w) => typeof w === 'string' && w !== '') : []
+      const bodyText = typeof value.text === 'string' && value.text !== ''
+        ? value.text
+        : (settled && Array.isArray(block.content) ? block.content.map(toolBlockText).filter((c) => c !== '').join('\n\n') : '')
+      const expect = payload !== null && typeof payload.expect === 'string' ? payload.expect : ''
+
+      const nodes = [
+        h('div', { key: 'head', className: 'dco-tool-head' },
+          h('span', { 'aria-hidden': true }, '⚗'),
+          h('span', { className: 'dco-tool-title' }, t('draft.title')),
+          h('span', { className: 'dco-tool-chip' }, draftKindLabel(kind, t)),
+        ),
+        h('div', { key: 'meta', className: 'dco-tool-meta' },
+          h('span', null, `${t('draft.kind')}: ${draftKindLabel(kind, t)}`),
+          h('span', null, `${t('toolview.study')}: ${study !== '' ? study : '—'}`),
+          h('span', null, `${t('toolview.root')}: ${root !== '' ? root : '—'}`),
+        ),
+      ]
+
+      if (payload !== null) {
+        nodes.push(h('div', { key: 'payload', className: 'dco-section' },
+          h('div', { className: 'dco-card-title' }, t('draft.payload')),
+          h('div', { className: 'dco-dim' }, `${t('draft.command')}: ${displayValue(payload.command)}`),
+          h('div', { className: 'dco-dim' },
+            `${t('draft.params')}: ${displayValue(payload.params === undefined ? {} : payload.params)}`),
+          expect !== ''
+            ? h('div', { className: 'dco-dim' }, `${t('draft.expect')}: ${expect.slice(0, 8)}`)
+            : null,
+        ))
+      }
+
+      if (preview !== null) {
+        const rowsView = [
+          [t('draft.preview.rows'), preview.rows],
+          [t('draft.preview.format'), preview.format],
+          [t('draft.preview.algorithm'), preview.algorithm],
+          [t('draft.preview.changed'), Array.isArray(preview.changedFields) ? preview.changedFields.join(', ') : preview.changedFields],
+          [t('draft.preview.pending'), preview.pendingCount],
+        ].filter((pair) => pair[1] !== undefined && pair[1] !== null && pair[1] !== '')
+        if (rowsView.length > 0) {
+          nodes.push(h('div', { key: 'preview-title', className: 'dco-card-title' }, t('draft.preview')))
+          nodes.push(h('table', { key: 'preview', className: 'dco-table' },
+            h('tbody', null, rowsView.map((pair, index) => h('tr', { key: `${index}:${pair[0]}` },
+              h('td', { className: 'dco-dim' }, pair[0]),
+              h('td', null, unknownText(pair[1])),
+            ))),
+          ))
+        }
+      }
+
+      if (warnings.length > 0) {
+        nodes.push(h('div', { key: 'warn', className: 'dco-warn' },
+          h('div', { className: 'dco-card-title' }, t('draft.warnings')),
+          h('div', null, warnings.join('\n')),
+        ))
+      }
+
+      nodes.push(h('div', { key: 'text-title', className: 'dco-card-title' }, t('draft.result')))
+      nodes.push(h('div', { key: 'text', className: 'dco-tool-text' }, bodyText !== '' ? bodyText : t('draft.noText')))
+
+      /* 交接：把草稿的 kind/payload/preview 一并交给面板预填；本卡不发 exec。 */
+      nodes.push(h('div', { key: 'actions', className: 'dco-row' },
+        h('button', {
+          type: 'button',
+          className: 'dco-btn dco-primary',
+          title: t('draft.openHint'),
+          onClick: () => requestOpenPanel({
+            root,
+            run: study,
+            kind,
+            payload: payload === null ? undefined : payload,
+            preview: preview === null ? undefined : preview,
+            warnings,
+          }),
+        }, t('draft.openPrefill')),
+      ))
+      return h('div', { className: 'dco-tool' }, nodes)
+    }
+
+    /**
      * 解析粘贴的结果内容（DESIGN §8.6B 的客户端镜像）。
      *
      * 与宿主同一套宽松规则：JSON 数组 → JSONL → 带 `id` 列的 CSV/TSV。
@@ -1327,8 +1586,16 @@ window.__ModuleLoader__.load({
       const source = isObject(selection) ? selection : {}
       const root = typeof source.root === 'string' ? source.root.trim() : ''
       const run = typeof source.run === 'string' ? source.run.trim() : ''
-      if (root === '' && run === '') return
-      pendingSelection = { root, run }
+      const kind = typeof source.kind === 'string' ? source.kind.trim() : ''
+      if (root === '' && run === '' && kind === '') return
+      pendingSelection = {
+        root,
+        run,
+        kind,
+        payload: isObject(source.payload) ? source.payload : undefined,
+        preview: isObject(source.preview) ? source.preview : undefined,
+        warnings: Array.isArray(source.warnings) ? source.warnings : undefined,
+      }
       for (const listener of selectionListeners) {
         try {
           listener(pendingSelection)
@@ -1337,6 +1604,18 @@ window.__ModuleLoader__.load({
         }
       }
       void openCondoptTab()
+    }
+
+    /**
+     * 草稿是一次性交付：被面板应用后立刻从模块级通道里摘掉。
+     *
+     * 只保留 `{root, run}` 这种「选中目标」（v2.0 行为：重新挂载仍会选中同一 study）；
+     * 草稿字段必须清掉，否则面板每次重新挂载都会重复预填、并把页签拽回「参数」。
+     */
+    function clearPendingDraft() {
+      if (pendingSelection === null) return
+      if (pendingSelection.kind === undefined && pendingSelection.payload === undefined) return
+      pendingSelection = { root: pendingSelection.root, run: pendingSelection.run }
     }
 
     async function openCondoptTab() {
@@ -1367,9 +1646,8 @@ window.__ModuleLoader__.load({
      * 面板                                                                *
      * ------------------------------------------------------------------ */
 
-    /** 三个子页签。 */
-    /** 子页签顺序（DESIGN §8.7H：摘要默认，视图懒加载）。 */
-    const PANES = ['summary', 'view', 'params', 'decisions']
+    /** 子页签顺序（DESIGN §8.7H 摘要默认 + §8.8L 对比，视图懒加载）。 */
+    const PANES = ['summary', 'view', 'params', 'decisions', 'compare']
 
     /**
      * 右侧栏面板本体。
@@ -1408,6 +1686,13 @@ window.__ModuleLoader__.load({
       const [initConfirm, setInitConfirm] = React.useState(false)
       /** 数字控件里写了非数字时的提示（不拦请求，只说明该字段被忽略）。 */
       const [inputNote, setInputNote] = React.useState('')
+      /** 草稿预填提示（condopt_draft 交接进来时显示一行，提醒仍需确认）。 */
+      const [draftNotice, setDraftNotice] = React.useState('')
+      /** 交接信号的「滴答」：监听器只递增它，真正应用草稿的是活着的组件的 effect。 */
+      const [draftTick, setDraftTick] = React.useState(0)
+      /** 对比页：选中的 run（2–8）与最近一次 /api/compare 结果。 */
+      const [compareRuns, setCompareRuns] = React.useState([])
+      const [compare, setCompare] = React.useState({ status: 'idle', data: null, error: '', signature: '' })
 
       /** 卸载后不再 setState（异步返回可能晚于卸载）。 */
       const aliveRef = React.useRef(true)
@@ -1419,7 +1704,7 @@ window.__ModuleLoader__.load({
          过期响应丢弃，同一目标不重复请求。 */
       const viewTargetRef = React.useRef('')
       const studyTargetRef = React.useRef('')
-      const inflightRef = React.useRef({ view: '', study: '' })
+      const inflightRef = React.useRef({ view: '', study: '', compare: '' })
       /* 当前选中的 run：imperative 记录，挂载路径不必等下一轮渲染就能接上加载。 */
       const selectedRunRef = React.useRef('')
 
@@ -1546,6 +1831,47 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * 跨 run 对比（DESIGN §8.8L）。
+       *
+       * 只在用户勾选 2–8 个 run 或点「重新对比」时请求；宿主侧零 spawn、
+       * 零写入 run 目录，客户端只把 `series`（best-so-far）画成叠加折线。
+       */
+      async function loadCompareFor(list, force) {
+        const wanted = Array.isArray(list) ? list.filter((value) => typeof value === 'string' && value !== '') : []
+        if (wanted.length < 2 || wanted.length > MAX_COMPARE_RUNS) return
+        const signature = wanted.join('|')
+        if (force !== true && compare.status === 'ready' && compare.signature === signature) return
+        if (force !== true && inflightRef.current.compare === signature) return
+        inflightRef.current.compare = signature
+        setCompare((current) => ({ status: 'loading', data: current.data, error: '', signature }))
+        try {
+          const query = withRoot(`${API}/compare?runs=${wanted.map((value) => encodeURIComponent(value)).join(',')}`, true)
+          const data = await fetchJson(query)
+          if (aliveRef.current !== true || inflightRef.current.compare !== signature) return
+          setCompare({ status: 'ready', data: isObject(data) ? data : null, error: '', signature })
+        } catch (error) {
+          if (aliveRef.current !== true || inflightRef.current.compare !== signature) return
+          setCompare({ status: 'error', data: null, error: messageOf(error), signature })
+        } finally {
+          if (inflightRef.current.compare === signature) inflightRef.current.compare = ''
+        }
+      }
+
+      function loadCompare(force) {
+        return loadCompareFor(compareRuns, force)
+      }
+
+      /** 勾选变化：立即取数（DESIGN §8.8L「多选 → GET /api/compare」），越界时清空结果。 */
+      function toggleCompareRun(value, checked) {
+        const next = checked === true
+          ? (compareRuns.includes(value) ? compareRuns : compareRuns.concat([value]))
+          : compareRuns.filter((item) => item !== value)
+        setCompareRuns(next)
+        if (next.length >= 2 && next.length <= MAX_COMPARE_RUNS) void loadCompareFor(next, false)
+        else setCompare({ status: 'idle', data: null, error: '', signature: '' })
+      }
+
+      /**
        * 某个子页签需要的数据；点击页签与 effect 都走这里，保证只发一次请求。
        *
        * DESIGN §8.7H：**摘要页只读 `/api/study`**，视图页懒加载（只有真的切过去
@@ -1560,10 +1886,54 @@ window.__ModuleLoader__.load({
           if (spec.status !== 'ready' && spec.status !== 'loading') void loadSpec()
           /* v2.0：「当前 study」块与写操作的 expect 都来自 /api/study，参数页必须也读它。 */
           if (study.run !== wanted) void loadStudy(false, wanted)
+        } else if (name === 'compare') {
+          /* 对比数据只由用户勾选/点按钮触发（DESIGN §8.8L：不做自动轮询）。 */
+          if (compareRuns.length >= 2) void loadCompare(false)
         } else {
           /* summary / decisions 都只要 /api/study。 */
           if (study.run !== wanted) void loadStudy(false, wanted)
         }
+      }
+
+      /**
+       * 草稿预填（DESIGN §8.8K）。
+       *
+       * 只把 `condopt_draft` 的 payload 填进对应区块：**不发任何请求**，
+       * 用户还得在面板里点确认才会走 `/api/exec`。
+       */
+      function applyDraftSelection(selection) {
+        if (isObject(selection) === false) return
+        const kind = typeof selection.kind === 'string' ? selection.kind : ''
+        if (kind === '') return
+        const payload = isObject(selection.payload) ? selection.payload : {}
+        const params = isObject(payload.params) ? payload.params : {}
+        if (kind === 'tell') {
+          setForm((current) => Object.assign({}, current, {
+            tellText: typeof params.resultsText === 'string' ? params.resultsText : '',
+          }))
+          setTellOpen(true)
+        } else if (kind === 'ask') {
+          setForm((current) => Object.assign({}, current, {
+            askN: params.n === undefined || params.n === null ? '' : String(params.n),
+            plate: typeof params.plate === 'string' ? params.plate : '',
+          }))
+        } else if (kind === 'override') {
+          const nested = isObject(params.params) ? params.params : {}
+          const draftValues = {}
+          for (const [name, value] of Object.entries(nested)) draftValues[name] = displayValue(value)
+          setParamValues(draftValues)
+          setForm((current) => Object.assign({}, current, {
+            algorithm: typeof params.algorithm === 'string' ? params.algorithm : current.algorithm,
+            reason: typeof params.reason === 'string' ? params.reason : current.reason,
+          }))
+        } else {
+          return
+        }
+        /* 预填完成后把用户带到参数页（tell 的 textarea 也在参数页里）。 */
+        setPane('params')
+        setDraftNotice(tr('draft.prefilled'))
+        /* 消费一次即清：重新挂载不会再重复预填、不会再改页签/覆盖表单。 */
+        clearPendingDraft()
       }
 
       /* ---------------- 生命周期 ---------------- */
@@ -1578,6 +1948,9 @@ window.__ModuleLoader__.load({
             selectedRunRef.current = selection.run
             setRun(selection.run)
           }
+          /* §8.8K：草稿**不在这里**应用——监听器可能属于一个已经不渲染的实例。
+             这里只递增滴答，让活着的组件在自己的 effect 里消费草稿（一次性）。 */
+          setDraftTick((value) => value + 1)
         }
         apply(pendingSelection)
         selectionListeners.add(apply)
@@ -1602,6 +1975,17 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         ensurePaneData(pane, run)
       }, [run, pane])
+
+      /**
+       * 草稿消费（DESIGN §8.8K + 第二波唯一未结项）。
+       *
+       * 只在**活着**的组件 effect 里应用：`applyDraftSelection` 结束时立刻把草稿
+       * 从模块级通道摘掉，所以重新挂载既不会再把页签拽回「参数」，也不会覆盖
+       * 用户已经改过的表单值；root/run 作为「选中目标」保留（v2.0 行为）。
+       */
+      React.useEffect(() => {
+        applyDraftSelection(pendingSelection)
+      }, [draftTick])
 
       /* 面板自己的 30s 定时器：只刷新当前页签的数据；卸载时清掉。 */
       React.useEffect(() => {
@@ -1663,6 +2047,8 @@ window.__ModuleLoader__.load({
         if (isObject(params) && Object.keys(params).length > 0) body.params = params
         const token = stateTokenOf()
         if (token !== '' && wanted === run) body.expect = token
+        /* 真的开始执行了：草稿预填提示就没有意义了（§8.8K 的「仍然要确认」已兑现）。 */
+        setDraftNotice('')
         /* 交接来的 root 一并回传，保证面板与宿主对同一个根目录说话。 */
         if (typeof handoffRoot === 'string' && handoffRoot !== '') body.root = handoffRoot
         setExec({
@@ -2660,6 +3046,17 @@ window.__ModuleLoader__.load({
           ))
         }
 
+        /* 草稿预填提示：告诉用户「已填好，但还没执行」（DESIGN §8.8K）。 */
+        if (draftNotice !== '') {
+          nodes.push(h('div', { key: 'draft', className: 'dco-warn' },
+            h('span', null, draftNotice),
+            h('button', {
+              type: 'button', className: 'dco-btn', style: { marginLeft: '8px' },
+              onClick: () => setDraftNotice(''),
+            }, t('tell.close')),
+          ))
+        }
+
         nodes.push(h('div', { key: 'block-current' }, currentBlock()))
         nodes.push(h('div', { key: 'block-next' }, nextBatchBlock()))
         nodes.push(h('div', { key: 'block-tell' }, tellBlock()))
@@ -2667,6 +3064,210 @@ window.__ModuleLoader__.load({
         nodes.push(h('div', { key: 'block-init' }, initBlock()))
         if (inputNote !== '') nodes.push(h('div', { key: 'note', className: 'dco-warn' }, inputNote))
         nodes.push(h('div', { key: 'exec' }, execPane()))
+        return nodes
+      }
+
+      /** 轴刻度：不要 4 位小数的噪声。 */
+      function axisLabel(value) {
+        const number = Number(value)
+        if (Number.isFinite(number) === false) return '—'
+        return Math.abs(number) >= 1000 ? number.toFixed(0) : number.toFixed(2)
+      }
+
+      /**
+       * best-so-far 叠加折线（纯客户端 SVG）。
+       *
+       * 只做「把每个 run 的 series 画出来」这一件事：没有缩放、没有交互、
+       * 没有多目标前沿（DESIGN §8.8L 明确不做）。
+       */
+      function compareChart(runsList) {
+        const series = runsList.map((row, index) => ({
+          id: String(row.id === undefined || row.id === null ? (row.rel === undefined ? index : row.rel) : row.id),
+          color: COMPARE_COLORS[index % COMPARE_COLORS.length],
+          points: Array.isArray(row.series)
+            ? row.series.filter((point) => isObject(point) && Number.isFinite(Number(point.t)) && Number.isFinite(Number(point.best)))
+            : [],
+        })).filter((entry) => entry.points.length >= 2)
+        if (series.length === 0) return h('div', { className: 'dco-note' }, t('compare.chartEmpty'))
+
+        let minT = Infinity
+        let maxT = -Infinity
+        let minY = Infinity
+        let maxY = -Infinity
+        for (const entry of series) {
+          for (const point of entry.points) {
+            const tx = Number(point.t)
+            const ty = Number(point.best)
+            minT = Math.min(minT, tx)
+            maxT = Math.max(maxT, tx)
+            minY = Math.min(minY, ty)
+            maxY = Math.max(maxY, ty)
+          }
+        }
+        const width = 640
+        const height = 220
+        const pad = 30
+        const spanT = maxT - minT === 0 ? 1 : maxT - minT
+        const spanY = maxY - minY === 0 ? 1 : maxY - minY
+        const xOf = (value) => pad + ((Number(value) - minT) / spanT) * (width - pad * 2)
+        const yOf = (value) => height - pad - ((Number(value) - minY) / spanY) * (height - pad * 2)
+
+        const children = [
+          h('line', { key: 'axis-x', x1: pad, y1: height - pad, x2: width - pad, y2: height - pad, stroke: 'currentColor', strokeOpacity: 0.25 }),
+          h('line', { key: 'axis-y', x1: pad, y1: pad, x2: pad, y2: height - pad, stroke: 'currentColor', strokeOpacity: 0.25 }),
+          h('text', { key: 't-min', x: pad, y: height - 8, fontSize: 10, fill: 'currentColor', opacity: 0.6 },
+            `${t('compare.axis.t')} ${axisLabel(minT)}`),
+          h('text', { key: 't-max', x: width - pad, y: height - 8, fontSize: 10, textAnchor: 'end', fill: 'currentColor', opacity: 0.6 },
+            axisLabel(maxT)),
+          h('text', { key: 'y-max', x: 2, y: pad, fontSize: 10, fill: 'currentColor', opacity: 0.6 },
+            `${t('compare.axis.best')} ${axisLabel(maxY)}`),
+          h('text', { key: 'y-min', x: 2, y: height - pad, fontSize: 10, fill: 'currentColor', opacity: 0.6 },
+            axisLabel(minY)),
+        ]
+        for (const entry of series) {
+          children.push(h('polyline', {
+            key: `line:${entry.id}`,
+            points: entry.points.map((point) => `${xOf(point.t).toFixed(1)},${yOf(point.best).toFixed(1)}`).join(' '),
+            fill: 'none',
+            stroke: entry.color,
+            strokeWidth: 2,
+          }))
+        }
+
+        return [
+          h('svg', {
+            key: 'svg',
+            className: 'dco-chart',
+            viewBox: `0 0 ${width} ${height}`,
+            role: 'img',
+            'aria-label': t('compare.chart'),
+          }, children),
+          h('div', { key: 'legend', className: 'dco-row' },
+            h('span', { className: 'dco-dim' }, `${t('compare.legend')}:`),
+            series.map((entry) => h('span', { key: `legend:${entry.id}`, className: 'dco-dim' },
+              h('span', { className: 'dco-dot', style: { background: entry.color } }),
+              entry.id)),
+          ),
+        ]
+      }
+
+      /** 「复制对比 Markdown」的内容：与表格同一份数据，方便贴进报告。 */
+      function compareMarkdown() {
+        const data = isObject(compare.data) ? compare.data : null
+        const runsList = data !== null && Array.isArray(data.runs) ? data.runs.filter((row) => isObject(row)) : []
+        const lines = [`# ${t('compare.mdTitle')}`, '']
+        lines.push(`| ${t('compare.col.run')} | ${t('compare.col.algorithm')} | ${t('compare.col.objective')} | `
+          + `${t('compare.col.budget')} | ${t('compare.col.observations')} | ${t('compare.col.pending')} | `
+          + `${t('compare.col.best')} | ${t('compare.col.token')} |`)
+        lines.push('|---|---|---|---|---|---|---|---|')
+        for (const row of runsList) {
+          lines.push(`| ${displayValue(row.id)} | ${displayValue(row.algorithm)} | ${displayValue(row.objective)} | `
+            + `${displayValue(row.budget)} | ${displayValue(row.nObservations)} | ${displayValue(row.pendingCount)} | `
+            + `${displayValue(row.best)} | ${shortToken(row.stateToken)} |`)
+        }
+        const warnings = data !== null && Array.isArray(data.warnings) ? data.warnings : []
+        if (warnings.length > 0) {
+          lines.push('', `## ${t('compare.warnings')}`)
+          for (const warning of warnings) lines.push(`- ${String(warning)}`)
+        }
+        return lines.join('\n')
+      }
+
+      /** 对比页（DESIGN §8.8L）：多选 2–8 个 run → 表格 + SVG 折线 + 复制 Markdown。 */
+      function comparePane() {
+        const options = rows
+          .map((row) => ({ value: studyValue(row), label: studyLabel(row) }))
+          .filter((option) => option.value !== '')
+        const tooFew = compareRuns.length < 2
+        const tooMany = compareRuns.length > MAX_COMPARE_RUNS
+        const data = isObject(compare.data) ? compare.data : null
+        const runsList = data !== null && Array.isArray(data.runs) ? data.runs.filter((row) => isObject(row)) : []
+        const nodes = []
+
+        nodes.push(h('div', { className: 'dco-card' },
+          h('div', { className: 'dco-card-title' }, t('compare.title')),
+          h('div', { className: 'dco-note' }, t('compare.hint')),
+          h('div', { className: 'dco-card-title' }, t('compare.select')),
+          h('div', { className: 'dco-form-grid' }, options.map((option) => h('label', {
+            key: option.value,
+            className: 'dco-toggle',
+          },
+            h('input', {
+              type: 'checkbox',
+              className: 'dco-check',
+              checked: compareRuns.includes(option.value),
+              onChange: (event) => {
+                const checked = isObject(event) && isObject(event.target) && typeof event.target.checked === 'boolean'
+                  ? event.target.checked
+                  : null
+                if (checked === null) return
+                toggleCompareRun(option.value, checked)
+              },
+            }),
+            h('span', null, option.label),
+          ))),
+          h('div', { className: 'dco-row' },
+            h('button', {
+              type: 'button', className: 'dco-btn dco-primary',
+              disabled: tooFew || tooMany || compare.status === 'loading',
+              onClick: () => void loadCompare(true),
+            }, compare.status === 'loading' ? t('compare.loading') : t('compare.reload')),
+            h('button', {
+              type: 'button', className: 'dco-btn',
+              disabled: data === null,
+              onClick: () => void copyThen(compareMarkdown()),
+            }, t('compare.copyMd')),
+            h('span', { className: 'dco-dim' },
+              tooMany ? t('compare.tooMany') : tooFew ? t('compare.tooFew') : `${compareRuns.length}/${MAX_COMPARE_RUNS}`),
+          ),
+        ))
+
+        if (compare.status === 'error') {
+          nodes.push(h('div', { className: 'dco-err' }, t('compare.failed', { message: compare.error })))
+        }
+        if (compare.status === 'loading' && data === null) {
+          nodes.push(h('div', { className: 'dco-row' },
+            h('span', { className: 'dco-spinner', 'aria-hidden': true }),
+            h('span', { className: 'dco-dim' }, t('compare.loading')),
+          ))
+        }
+
+        if (data !== null) {
+          if (runsList.length === 0) {
+            nodes.push(h('div', { className: 'dco-note' }, t('compare.empty')))
+          } else {
+            nodes.push(h('table', { key: 'table', className: 'dco-table' },
+              h('thead', null, h('tr', null,
+                h('th', null, t('compare.col.run')),
+                h('th', null, t('compare.col.algorithm')),
+                h('th', null, t('compare.col.objective')),
+                h('th', null, t('compare.col.budget')),
+                h('th', null, t('compare.col.observations')),
+                h('th', null, t('compare.col.pending')),
+                h('th', null, t('compare.col.best')),
+                h('th', null, t('compare.col.token')))),
+              h('tbody', null, runsList.map((row, index) => h('tr', { key: `${index}:${displayValue(row.id)}` },
+                h('td', null, unknownText(row.id)),
+                h('td', null, unknownText(row.algorithm)),
+                h('td', null, unknownText(row.objective)),
+                h('td', null, unknownText(row.budget)),
+                h('td', null, unknownText(row.nObservations)),
+                h('td', null, unknownText(row.pendingCount)),
+                h('td', null, unknownText(row.best)),
+                h('td', { className: 'dco-dim', title: displayValue(row.stateToken) }, shortToken(row.stateToken)),
+              ))),
+            ))
+            nodes.push(h('div', { key: 'chart-title', className: 'dco-card-title' }, t('compare.chart')))
+            nodes.push(h('div', { key: 'chart' }, compareChart(runsList)))
+          }
+          const warnings = Array.isArray(data.warnings) ? data.warnings.filter((item) => typeof item === 'string' && item !== '') : []
+          if (warnings.length > 0) {
+            nodes.push(h('div', { key: 'warn', className: 'dco-warn' },
+              h('div', { className: 'dco-card-title' }, t('compare.warnings')),
+              h('div', null, warnings.join('\n')),
+            ))
+          }
+        }
         return nodes
       }
 
@@ -2799,6 +3400,8 @@ window.__ModuleLoader__.load({
         body = viewPane()
       } else if (pane === 'params') {
         body = paramsPane()
+      } else if (pane === 'compare') {
+        body = comparePane()
       } else {
         body = decisionsPane()
       }
@@ -2982,6 +3585,18 @@ window.__ModuleLoader__.load({
               return dispose
             } catch (error) {
               noteRegistration('slot:tool.call.toolview(condopt_view)', false, messageOf(error))
+              return undefined
+            }
+          }))
+
+          /* §8.8K 草稿卡：只把草稿交回面板，绝不在这里执行（agent 侧仍无写工具）。 */
+          track(slots.inject('tool.call.toolview', () => {
+            try {
+              const dispose = slots.register({ name: 'tool.call.toolview', key: 'condopt_draft', locale: NS }, CondoptDraftRow)
+              noteRegistration('slot:tool.call.toolview(condopt_draft)', true, '')
+              return dispose
+            } catch (error) {
+              noteRegistration('slot:tool.call.toolview(condopt_draft)', false, messageOf(error))
               return undefined
             }
           }))

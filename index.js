@@ -2106,6 +2106,17 @@ export function createHandler(deps = {}) {
         })
         return
       }
+      if (route === '/compare') {
+        /* DESIGN §8.8 L：跨 run 对比。零 spawn、零写入——series 全部由宿主直接读文件算出。 */
+        const resolved = resolveRootHere(url.searchParams.get('root'), url.searchParams.get('sessionId'))
+        if (resolved.root === null) {
+          sendJson(res, 409, { error: resolved.error, code: resolved.code })
+          return
+        }
+        rootRef.root = resolved.root
+        sendJson(res, 200, await comparePayload({ root: resolved.root }, url.searchParams.get('runs') || ''))
+        return
+      }
       if (route === '/studies') {
         const resolved = resolveRootHere(url.searchParams.get('root'), url.searchParams.get('sessionId'))
         if (resolved.root === null) {
@@ -2182,6 +2193,576 @@ export function createHandler(deps = {}) {
     } catch (error) {
       sendError(res, error)
     }
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * v3.0 第二波（DESIGN §8.8）：草稿工具 condopt_draft + /api/compare
+ * ------------------------------------------------------------------ */
+
+/** 草稿允许的 kind（DESIGN §8.8 K）。 */
+const DRAFT_KINDS = ['ask', 'tell', 'override']
+const COMPARE_MIN_RUNS = 2
+const COMPARE_MAX_RUNS = 8
+/** series 点数上限（DESIGN §8.8 L）：超出等距降采样并在 warnings 注明。 */
+const COMPARE_MAX_POINTS = 400
+/** 算法目录（spec --json）的进程内缓存时长：override 草稿每次都要查目录，冷启动约数秒。 */
+const SPEC_CACHE_MS = 60000
+const specCatalogCache = { key: '', at: 0, data: null }
+
+/** pending.json 的记录（用于「id 不在 pending」判定）；不可读给空数组。 */
+function pendingItemsOf(runDir) {
+  const pending = readJsonFileSync(join(runDir, 'pending.json'))
+  if (Array.isArray(pending)) return pending
+  if (isPlainObject(pending) && Array.isArray(pending.pending)) return pending.pending
+  return []
+}
+
+/** 把任意值序列化成紧凑 JSON（草稿里给面板/文本展示用，保证单行）。 */
+function compactJsonText(value) {
+  try {
+    const text = JSON.stringify(value)
+    return typeof text === 'string' ? text : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 等距降采样：按索引均匀取 `maxPoints` 个点，保留首尾。
+ *
+ * 用「索引等分」而不是「固定 stride」：stride 取整会让 1000 点降到 334 点（浪费了
+ * 三分之一的展示预算），等分索引刚好用满上限且仍然等距。返回是否真的降采样过，
+ * 由调用方写进 warnings（DESIGN §8.8 L）。
+ */
+function downsampleSeries(series, maxPoints = COMPARE_MAX_POINTS) {
+  if (!Array.isArray(series) || series.length <= maxPoints) return { series: series || [], downsampled: false }
+  const last = series.length - 1
+  const out = []
+  let previousIndex = -1
+  for (let k = 0; k < maxPoints; k += 1) {
+    const index = maxPoints === 1 ? 0 : Math.round((k * last) / (maxPoints - 1))
+    if (index === previousIndex) continue
+    out.push(series[index])
+    previousIndex = index
+  }
+  if (out[out.length - 1] !== series[last]) out.push(series[last])
+  return { series: out, downsampled: true }
+}
+
+/**
+ * 从 `dataset.jsonl` 直接算 best-so-far（DESIGN §8.8 L：**不 spawn CLI、不渲染**）。
+ *
+ * 目标名优先取 problem.objective 的 `objectives[0]`（多目标取主目标），退化到 `name`；
+ * 每行先看 `objectives[name]`，单目标再看 `row.y`。direction=max 取运行最大值、
+ * min 取运行最小值。返回 `{series, rows, objectiveName, error?}`。
+ */
+function bestSoFarFromDataset(runDir, direction, problem) {
+  const text = readTextFileSync(join(runDir, 'dataset.jsonl'))
+  if (text === null) return { series: [], rows: 0, objectiveName: '', error: 'dataset.jsonl 不存在' }
+  const objectiveNode = isPlainObject(problem) ? problem.objective : undefined
+  const names = isPlainObject(objectiveNode) && Array.isArray(objectiveNode.objectives) ? objectiveNode.objectives.map(String) : []
+  const objectiveName = names.length > 0
+    ? names[0]
+    : (isPlainObject(objectiveNode) && typeof objectiveNode.name === 'string' ? objectiveNode.name : '')
+  const wantMax = direction !== 'min'
+  const series = []
+  let rows = 0
+  let usable = 0
+  for (const line of text.split(/\r?\n/)) {
+    if (line.trim() === '') continue
+    rows += 1
+    const row = parseJsonLoose(line)
+    if (!isPlainObject(row)) continue
+    let value = null
+    if (isPlainObject(row.objectives)) value = numberOrNull(row.objectives[objectiveName])
+    if (value === null) value = numberOrNull(row.y)
+    if (value === null) continue
+    const previous = usable === 0 ? null : series[series.length - 1].best
+    const best = previous === null ? value : (wantMax ? Math.max(previous, value) : Math.min(previous, value))
+    series.push({ t: usable + 1, best })
+    usable += 1
+  }
+  if (usable === 0) return { series: [], rows, objectiveName, error: 'dataset.jsonl 里没有可用的目标值' }
+  return { series, rows, objectiveName }
+}
+
+/** rounds.json 的 best 作为兜底 series（dataset 不可用时）。 */
+function bestSoFarFromRounds(runDir) {
+  const rounds = readJsonFileSync(join(runDir, 'rounds.json'))
+  if (!Array.isArray(rounds)) return { series: [], error: 'rounds.json 不存在或不是数组' }
+  const series = []
+  for (const row of rounds) {
+    const value = isPlainObject(row) ? numberOrNull(row.best) : null
+    if (value === null) continue
+    series.push({ t: numberOrNull(isPlainObject(row) ? row.round : undefined) ?? series.length + 1, best: value })
+  }
+  return series.length === 0 ? { series: [], error: 'rounds.json 里没有 best' } : { series }
+}
+
+/** direction：单目标取 `direction`，多目标取 `directions[0]`；读不到给 'max'。 */
+function directionOf(problem) {
+  const objectiveNode = isPlainObject(problem) ? problem.objective : undefined
+  if (!isPlainObject(objectiveNode)) return 'max'
+  if (typeof objectiveNode.direction === 'string' && objectiveNode.direction !== '') return objectiveNode.direction
+  if (Array.isArray(objectiveNode.directions) && typeof objectiveNode.directions[0] === 'string') return objectiveNode.directions[0]
+  return 'max'
+}
+
+/**
+ * 取算法目录（`spec --json`）——**只读**子命令，不写 run 目录。
+ *
+ * 带 60s 进程内缓存：override 草稿每次都要查目录，而 `spec` 冷启动要 import
+ * scikit-learn（数秒）。拿不到就返回 `{catalog:null, error}`，草稿只记 warning。
+ * `deps.specCatalog` 可直接注入（harness 免 spawn）。
+ */
+async function specCatalogOf(deps, rootAbs) {
+  if (Array.isArray(deps.specCatalog)) return { catalog: deps.specCatalog, error: '' }
+  if (typeof deps.specCatalog === 'function') {
+    const value = await safeCallAsync(() => deps.specCatalog(), null)
+    return Array.isArray(value) ? { catalog: value, error: '' } : { catalog: null, error: 'specCatalog 注入未返回数组' }
+  }
+  const root = String(rootAbs || '')
+  if (root === '') return { catalog: null, error: 'root 未解析，无法读取算法目录' }
+  const nowMs = Date.now()
+  if (specCatalogCache.key === root && specCatalogCache.data !== null && nowMs - specCatalogCache.at < SPEC_CACHE_MS) {
+    return { catalog: specCatalogCache.data, error: '' }
+  }
+  const outcome = await runCli(['spec', '--json'], {
+    root,
+    python: deps.python,
+    config: deps.config,
+    env: deps.env,
+    spawnImpl: deps.spawnImpl,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+  })
+  if (!outcome.ok) {
+    return { catalog: null, error: firstLine(outcome.stderr) || firstLine(outcome.stdout) || outcome.error || 'spec 调用失败' }
+  }
+  const data = parseJsonLoose(outcome.stdout, outcome.stderr)
+  if (!Array.isArray(data)) return { catalog: null, error: 'spec --json 不是算法数组' }
+  specCatalogCache.key = root
+  specCatalogCache.at = nowMs
+  specCatalogCache.data = data
+  return { catalog: data, error: '' }
+}
+
+/** await 一个可能抛错的异步取值函数，失败给回退值。 */
+async function safeCallAsync(fn, fallback) {
+  try {
+    const value = await fn()
+    return value === undefined || value === null ? fallback : value
+  } catch {
+    return fallback
+  }
+}
+
+/** 在算法目录里按名字找算法描述（`{name, params:{…}}` 或 `{algorithms:[…]}` 两种形状）。 */
+function findAlgorithmSpec(catalog, name) {
+  if (!Array.isArray(catalog)) return null
+  for (const entry of catalog) {
+    if (!isPlainObject(entry)) continue
+    if (entry.name === name) return entry
+    if (Array.isArray(entry.algorithms)) {
+      const hit = entry.algorithms.find((row) => isPlainObject(row) && row.name === name)
+      if (hit !== undefined) return hit
+    }
+  }
+  return null
+}
+
+/** 算法 spec 里的默认参数表（兼容 `params` 为对象或 `{name:{default}}` 列表）。 */
+function algorithmDefaults(spec) {
+  if (!isPlainObject(spec) || !isPlainObject(spec.params)) return {}
+  const out = {}
+  for (const [key, value] of Object.entries(spec.params)) {
+    if (isPlainObject(value) && Object.prototype.hasOwnProperty.call(value, 'default')) out[key] = value.default
+    else if (!isPlainObject(value)) out[key] = value
+  }
+  return out
+}
+
+/** 与 spec 默认值不同的字段（override 草稿的 `changedFields`）。 */
+function changedFieldsOf(params, defaults) {
+  const out = []
+  if (!isPlainObject(params)) return out
+  for (const [key, value] of Object.entries(params)) {
+    if (!Object.prototype.hasOwnProperty.call(defaults, key) || defaults[key] !== value) out.push(key)
+  }
+  return out
+}
+
+/**
+ * 草稿载荷（DESIGN §8.8 K）。
+ *
+ * **只读**：只读 run 目录里的文件（pending/dataset/problem/config），外加一个只读的
+ * `spec --json`（仅 override 需要，用于「algorithm 不在 spec」与 changedFields）；
+ * 绝不写 run 目录、绝不调 `POST /api/exec`。所有问题都记为 `warnings` 而不是抛错——
+ * 草稿的用途就是「把将要做的事摊开给用户看」。
+ */
+export async function draftPayload(deps = {}, args = {}) {
+  const input = isPlainObject(args) ? args : {}
+  const env = isPlainObject(deps.env) ? deps.env : process.env
+  const config = isPlainObject(deps.config) ? deps.config : {}
+  const warnings = []
+  const kind = DRAFT_KINDS.includes(input.kind) ? input.kind : ''
+  if (kind === '') warnings.push(`kind 必须是 ${DRAFT_KINDS.join(' / ')}（收到 ${JSON.stringify(input.kind)}）`)
+
+  const resolved = resolveRoot({
+    root: isPlainObject(deps.root) ? deps.root.root : deps.root,
+    env,
+    config,
+    cwd: deps.cwd,
+    sessionCwd: deps.sessionCwd,
+    selfDir: deps.selfDir,
+    workspaces: deps.workspaces,
+    isRoot: deps.isRoot,
+  })
+  const root = resolved.root
+  if (root === null) warnings.push(resolved.error)
+
+  /* 目标 run：显式给就用 resolveRunDir 围栏；否则退到「最近修改的 study」。 */
+  let runAbs = ''
+  let relRun = ''
+  if (root !== null) {
+    if (typeof input.run === 'string' && input.run.trim() !== '') {
+      try {
+        runAbs = resolveRunDir(root, input.run.trim())
+        relRun = relToRoot(root, runAbs)
+      } catch (error) {
+        warnings.push(`run 不合法：${errorText(error)}`)
+      }
+    } else {
+      const studies = await listStudies(root)
+      if (studies.length === 0) warnings.push('runs/ 下没有可用的 study（需要含 problem.json 或 dataset.jsonl）')
+      else {
+        relRun = studies[0].rel
+        runAbs = studies[0].abs
+      }
+    }
+  }
+  const runExists = runAbs !== '' && existsSync(runAbs)
+  if (runAbs !== '' && !runExists) warnings.push(`run 不存在：${relRun}`)
+
+  const pendingItems = runExists ? pendingItemsOf(runAbs) : []
+  const pendingCount = runExists ? pendingCountOf(runAbs) : null
+  const token = runExists ? stateToken(runAbs) : ''
+  const preview = { pendingCount }
+  const payload = { command: kind, params: {} }
+
+  if (kind === 'ask') {
+    if (input.n !== undefined && numberOrNull(input.n) !== null) payload.params.n = numberOrNull(input.n)
+    if (typeof input.plate === 'string' && input.plate.trim() !== '') payload.params.plate = input.plate.trim()
+    if (pendingCount !== null && pendingCount > 0) {
+      warnings.push(`当前还有 ${pendingCount} 条未回填的 pending：CLI 会拒绝新的 ask，请先 tell`)
+    }
+  } else if (kind === 'tell') {
+    let resultsText = typeof input.resultsText === 'string' ? input.resultsText : ''
+    if (resultsText === '' && Array.isArray(input.observations)) {
+      const rows = input.observations.filter((row) => isPlainObject(row))
+      if (rows.length === 0) warnings.push('observations 为空，无法生成回填内容')
+      else resultsText = rows.map((row) => JSON.stringify(row)).join('\n')
+    }
+    if (resultsText === '') {
+      if (typeof input.resultsText !== 'string' && !Array.isArray(input.observations)) {
+        warnings.push('tell 草稿需要 resultsText（内容）或 observations（对象数组）')
+      }
+    } else {
+      payload.params.resultsText = resultsText
+      try {
+        const parsed = parseResultsText(resultsText)
+        preview.rows = parsed.rows
+        preview.format = parsed.format
+        if (parsed.rows > 1 && (input.observations === undefined)) {
+          /* 行数本身就是重点信息，无需额外 warning */
+        }
+      } catch (error) {
+        warnings.push(`resultsText 无法解析：${errorText(error)}`)
+        preview.rows = null
+        preview.format = null
+      }
+      /* 「结果 id 不在 pending」：只在能解析出 id 时才有意义。 */
+      const ids = collectResultIds(resultsText)
+      if (ids.length > 0 && pendingCount !== null) {
+        const known = new Set(pendingItems.map((item) => String(isPlainObject(item) ? item.id : item)))
+        const unknown = ids.filter((id) => !known.has(String(id)))
+        if (unknown.length > 0) {
+          warnings.push(`结果里有 ${unknown.length} 个 id 不在当前 pending：${unknown.slice(0, 5).join(', ')}${unknown.length > 5 ? ' …' : ''}`)
+        }
+      }
+    }
+    if (resultsText !== '' && countLines(resultsText) > MAX_RESULTS_LINES) {
+      warnings.push(`行数超过 ${MAX_RESULTS_LINES}（实测 ${countLines(resultsText)} 行），POST /api/exec 会被拒（400）`)
+    }
+  } else if (kind === 'override') {
+    if (typeof input.algorithm === 'string' && input.algorithm.trim() !== '') payload.params.algorithm = input.algorithm.trim()
+    else warnings.push('override 草稿需要 algorithm')
+    if (isPlainObject(input.params)) payload.params.params = input.params
+    if (typeof input.reason === 'string' && input.reason.trim() !== '') payload.params.reason = input.reason.trim()
+    else warnings.push('override 需要 reason（CLI 必填，缺失会 400）')
+    const algorithm = typeof payload.params.algorithm === 'string' ? payload.params.algorithm : ''
+    preview.algorithm = algorithm === '' ? null : algorithm
+    if (algorithm !== '') {
+      const { catalog, error } = await specCatalogOf(deps, root)
+      if (catalog === null) {
+        warnings.push(`拿不到算法目录，无法校验 algorithm：${error}`)
+        preview.changedFields = isPlainObject(input.params) ? Object.keys(input.params) : []
+      } else {
+        const spec = findAlgorithmSpec(catalog, algorithm)
+        if (spec === null) warnings.push(`algorithm 不在 spec 目录里：${algorithm}`)
+        preview.changedFields = changedFieldsOf(input.params, algorithmDefaults(spec))
+      }
+    } else {
+      preview.changedFields = isPlainObject(input.params) ? Object.keys(input.params) : []
+    }
+  }
+
+  /* expect 永远是宿主当前令牌；它绝不进 params（面板会把它放在 body 顶层）。 */
+  if (token !== '') payload.expect = token
+  else if (runExists) warnings.push('无法计算 stateToken（run 目录不可读），草稿没有 expect：面板确认时可能被 409 拒绝')
+
+  const text = buildDraftText({ kind, root, relRun, payload, preview, warnings, pendingCount })
+  return { kind, run: relRun, root, payload, preview, warnings, text }
+}
+
+/** 从 resultsText 里尽力收集记录 id（JSON 数组 / JSONL / 带 id 列 CSV 都认）。 */
+function collectResultIds(text) {
+  const ids = []
+  const push = (value) => {
+    if (typeof value === 'string' && value.trim() !== '') ids.push(value.trim())
+    else if (typeof value === 'number' && Number.isFinite(value)) ids.push(String(value))
+  }
+  const trimmed = String(text || '').trim()
+  const asJson = tryParseJson(trimmed)
+  if (asJson.ok && Array.isArray(asJson.value)) {
+    for (const row of asJson.value) if (isPlainObject(row)) push(row.id)
+    if (ids.length > 0) return ids
+  }
+  const lines = trimmed.split(/\r?\n/).filter((line) => line.trim() !== '')
+  let jsonlIds = 0
+  for (const line of lines) {
+    const parsed = tryParseJson(line.trim())
+    if (parsed.ok && isPlainObject(parsed.value)) {
+      push(parsed.value.id)
+      jsonlIds += 1
+    }
+  }
+  if (jsonlIds === lines.length && lines.length > 0 && ids.length > 0) return ids
+  ids.length = 0
+  const header = lines[0] || ''
+  for (const delimiter of ['\t', ',', ';']) {
+    if (!header.includes(delimiter)) continue
+    const columns = header.split(delimiter).map((name) => name.trim().replace(/^"|"$/g, '').toLowerCase())
+    const idIndex = columns.indexOf('id')
+    if (idIndex === -1) continue
+    for (const line of lines.slice(1)) {
+      const cells = line.split(delimiter)
+      push(cells[idIndex] === undefined ? undefined : cells[idIndex].replace(/^"|"$/g, ''))
+    }
+    break
+  }
+  return ids
+}
+
+/** 草稿的紧凑 Markdown：做什么 / 目标 run / 将改什么 / 需要确认（DESIGN §8.8 K）。 */
+export function buildDraftText({ kind, root, relRun, payload, preview, warnings }) {
+  const command = typeof payload.command === 'string' && payload.command !== '' ? payload.command : '(未知)'
+  const lines = [`## condopt 草稿：${command}`]
+  lines.push(`- 目标 run: ${relRun === '' ? '（未确定）' : relRun}`)
+  lines.push(`- root: ${root === null ? '（未解析，见警告）' : root}`)
+  const params = isPlainObject(payload.params) ? payload.params : {}
+  if (kind === 'ask') {
+    const n = params.n === undefined ? '默认' : params.n
+    lines.push(`- 将生成: ${n} 条待测条件${params.plate === undefined ? '' : `（指定板 ${params.plate}）`}`)
+    lines.push(`- 当前待回填: ${preview.pendingCount === null ? '未知' : `${preview.pendingCount} 条`}`)
+  } else if (kind === 'tell') {
+    lines.push(`- 将回填: ${preview.rows === null || preview.rows === undefined ? '（内容未通过校验，见警告）' : `${preview.rows} 条（${preview.format}）`}`)
+    lines.push(`- 当前待回填: ${preview.pendingCount === null ? '未知' : `${preview.pendingCount} 条`}`)
+  } else if (kind === 'override') {
+    lines.push(`- 将覆写算法: ${preview.algorithm === null || preview.algorithm === undefined ? '（未给出，见警告）' : preview.algorithm}`)
+    const changed = Array.isArray(preview.changedFields) ? preview.changedFields : []
+    lines.push(`- 参数改动: ${changed.length === 0 ? '（未给出或与 spec 默认一致）' : changed.join(', ')}`)
+    lines.push(`- 理由: ${params.reason === undefined ? '（缺失，见警告）' : params.reason}`)
+  }
+  if (typeof payload.expect === 'string' && payload.expect !== '') {
+    lines.push(`- 状态令牌: ${payload.expect.slice(0, 8)}…（面板确认时会带上，过期会被 409 拒绝）`)
+  }
+  lines.push(`- 将发送: POST /condopt/api/exec {command:"${command}", params:${compactJsonText(params)}}`)
+  if (Array.isArray(warnings) && warnings.length > 0) {
+    lines.push('- 警告:')
+    for (const warning of warnings) lines.push(`  - ${warning}`)
+  }
+  lines.push('')
+  lines.push('**需要你在条件优化面板里确认后才会执行**（本工具只出草稿：不写 run 目录、不调用 /api/exec）。')
+  return lines.join('\n')
+}
+
+/**
+ * 跨 run 对比载荷（DESIGN §8.8 L）。
+ *
+ * **零 spawn、零写入**：best-so-far series 直接从 `dataset.jsonl`（必要时 `rounds.json`）
+ * 读文件算出。缺文件/解析失败/围栏外的 run 一律记 warnings 并从结果里省略，整体仍 200；
+ * `runs` 数量越界（<2 或 >8）才抛 400。
+ *
+ * @param {object} deps `{root, fsImpl?, maxPoints?}`
+ * @param {string[]|string} runs run 路径数组（或逗号分隔串）
+ */
+export async function comparePayload(deps = {}, runs = []) {
+  const list = Array.isArray(runs)
+    ? runs.map((value) => String(value).trim()).filter((value) => value !== '')
+    : String(runs || '').split(',').map((value) => value.trim()).filter((value) => value !== '')
+  if (list.length < COMPARE_MIN_RUNS || list.length > COMPARE_MAX_RUNS) {
+    throw new CondoptError(
+      `runs 需要 ${COMPARE_MIN_RUNS}–${COMPARE_MAX_RUNS} 个（收到 ${list.length} 个）`,
+      'bad-param',
+      400,
+    )
+  }
+  const root = resolve(String(deps.root || ''))
+  const warnings = []
+  const out = []
+  const maxPoints = Number.isFinite(deps.maxPoints) ? deps.maxPoints : COMPARE_MAX_POINTS
+  const seen = new Set()
+  for (const item of list) {
+    let runAbs = ''
+    try {
+      runAbs = resolveRunDir(root, item)
+    } catch (error) {
+      warnings.push(`跳过 ${item}：${errorText(error)}`)
+      continue
+    }
+    if (seen.has(runAbs)) {
+      warnings.push(`跳过 ${item}：与前面的 run 重复`)
+      continue
+    }
+    seen.add(runAbs)
+    const id = basename(runAbs)
+    const rel = relToRoot(root, runAbs)
+    const problem = readJsonFileSync(join(runAbs, 'problem.json'))
+    const datasetExists = existsSync(join(runAbs, 'dataset.jsonl'))
+    if (problem === null && !datasetExists) {
+      warnings.push(`跳过 ${rel}：不是可读的 study（缺 problem.json 与 dataset.jsonl）`)
+      continue
+    }
+    const config = readJsonFileSync(join(runAbs, 'config.json'))
+    const direction = directionOf(problem)
+    let seriesResult = bestSoFarFromDataset(runAbs, direction, problem)
+    if (seriesResult.error !== undefined) {
+      const fallback = bestSoFarFromRounds(runAbs)
+      if (fallback.error === undefined) {
+        warnings.push(`${rel}：dataset.jsonl 不可用（${seriesResult.error}），series 退回 rounds.json`)
+        seriesResult = { series: fallback.series, rows: seriesResult.rows, objectiveName: seriesResult.objectiveName }
+      } else {
+        warnings.push(`跳过 ${rel}：${seriesResult.error}；${fallback.error}`)
+        continue
+      }
+    }
+    const sampled = downsampleSeries(seriesResult.series, maxPoints)
+    if (sampled.downsampled) {
+      warnings.push(`${rel}：series ${seriesResult.series.length} 点超过 ${maxPoints}，已等距降采样到 ${sampled.series.length} 点`)
+    }
+    const best = sampled.series.length === 0 ? null : sampled.series[sampled.series.length - 1].best
+    out.push({
+      id,
+      rel,
+      algorithm: isPlainObject(config) && typeof config.algorithm === 'string' ? config.algorithm : '',
+      objective: describeObjective(isPlainObject(problem) ? problem.objective : undefined),
+      direction,
+      budget: numberOrNull(isPlainObject(problem) ? problem.budget : undefined)
+        ?? numberOrNull(isPlainObject(config) && isPlainObject(config.context) ? config.context.budget_total : undefined)
+        ?? null,
+      nObservations: datasetExists ? countLines(readTextFileSync(join(runAbs, 'dataset.jsonl')) || '') : seriesResult.rows,
+      pendingCount: pendingCountOf(runAbs) ?? 0,
+      best,
+      stateToken: stateToken(runAbs),
+      series: sampled.series,
+    })
+  }
+  return { ok: true, runs: out, warnings }
+}
+
+/**
+ * `condopt_draft` 的工具声明（DESIGN §8.8 K）。
+ *
+ * 只出草稿：把面板将发给 `/api/exec` 的同一形状（`payload`）连同预览与警告交给用户，
+ * 由用户在面板里确认后才真正执行。工具本身**不写 run 目录、不调 exec**。
+ */
+function condoptDraftTool(config, deps = {}) {
+  return {
+    name: 'condopt_draft',
+    description: '为某个 condopt study 起草一次写操作（ask 生成下一批 / tell 回填结果 / override 覆写算法），'
+      + '返回面板将发送的 payload、预览与警告，供用户确认后执行。只读：不写 run 目录、不调用 /api/exec，'
+      + '真正执行必须在条件优化面板里由用户确认。',
+    parameters: {
+      type: 'object',
+      properties: {
+        root: { type: 'string', description: 'condopt 仓库根目录；省略=按 resolveRoot 解析' },
+        run: { type: 'string', description: 'runs 下的 study，如 demo_moo；省略=取最近修改的一个' },
+        kind: { type: 'string', enum: DRAFT_KINDS, description: '草稿类型：ask / tell / override' },
+        n: { type: 'number', description: 'kind=ask：本批生成几条' },
+        plate: { type: 'string', description: 'kind=ask：孔板编号（同一板续测时显式指定）' },
+        resultsText: { type: 'string', description: 'kind=tell：实测结果内容（JSON/JSONL/带 id 列 CSV），不是路径' },
+        observations: {
+          type: 'array',
+          description: 'kind=tell：结构化结果数组（宿主会序列化成 resultsText，优先于 resultsText）',
+          items: { type: 'object' },
+        },
+        algorithm: { type: 'string', description: 'kind=override：目标算法名' },
+        params: { type: 'object', description: 'kind=override：要覆写的算法参数' },
+        reason: { type: 'string', description: 'kind=override：覆写理由（CLI 必填）' },
+      },
+      required: ['kind'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string' },
+          run: { type: 'string' },
+          root: { type: 'string' },
+          payload: { type: 'object' },
+          preview: { type: 'object' },
+          warnings: { type: 'array', items: { type: 'string' } },
+          text: { type: 'string' },
+        },
+        required: ['kind', 'run', 'root', 'payload', 'warnings', 'text'],
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: isPlainObject(value) && typeof value.text === 'string' ? value.text : String(value),
+      }],
+      presentationMeta: (_args, value) => ({
+        kind: isPlainObject(value) ? value.kind : '',
+        run: isPlainObject(value) ? value.run : '',
+        root: isPlainObject(value) ? value.root : '',
+      }),
+    },
+    isConcurrencySafe: () => true,
+    timeoutMs: 120000,
+    async execute(args, exec) {
+      const input = isPlainObject(args) ? args : {}
+      const sessionCwd = cwdFromExec(exec)
+      const draft = await draftPayload({
+        root: input.root,
+        config,
+        env: process.env,
+        cwd: sessionCwd,
+        selfDir: typeof deps.selfDir === 'string' && deps.selfDir !== '' ? deps.selfDir : PLUGIN_DIR,
+        workspaces: deps.workspaces,
+        specCatalog: deps.specCatalog,
+        python: deps.python,
+      }, input)
+      return {
+        kind: draft.kind,
+        run: draft.run,
+        root: typeof draft.root === 'string' ? draft.root : '',
+        payload: draft.payload,
+        preview: draft.preview,
+        warnings: draft.warnings,
+        text: draft.text,
+      }
+    },
   }
 }
 
@@ -2510,6 +3091,8 @@ export function apply(ctx, config = {}) {
     ctx.webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler: createHandler(handlerDeps) }))
   registerEntry(ctx, 'tools', 'condopt: condopt_view 工具', () =>
     ctx.tools.register(condoptViewTool(cfg, { workspaces: () => workspaceListOf(ctx) })))
+  registerEntry(ctx, 'tools', 'condopt: condopt_draft 草稿工具', () =>
+    ctx.tools.register(condoptDraftTool(cfg, { workspaces: () => workspaceListOf(ctx) })))
 }
 
 /**

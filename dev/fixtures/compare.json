@@ -1,0 +1,39 @@
+{
+  "ok": true,
+  "runs": [
+    {
+      "id": "demo_moo",
+      "rel": "runs/demo_moo",
+      "algorithm": "parego",
+      "objective": "yield:max,cost:min",
+      "direction": "max",
+      "budget": 24,
+      "nObservations": 24,
+      "pendingCount": 0,
+      "best": 89.9556,
+      "stateToken": "aaaabbbbccccdddd",
+      "series": [
+        { "t": 1, "best": 80.1 },
+        { "t": 2, "best": 85.5 },
+        { "t": 3, "best": 89.9556 }
+      ]
+    },
+    {
+      "id": "demo",
+      "rel": "runs/demo",
+      "algorithm": "bayes",
+      "objective": "yield:max",
+      "direction": "max",
+      "budget": 24,
+      "nObservations": 24,
+      "pendingCount": 2,
+      "best": 96.4,
+      "stateToken": "1111222233334444",
+      "series": [
+        { "t": 1, "best": 90.0 },
+        { "t": 2, "best": 96.4 }
+      ]
+    }
+  ],
+  "warnings": ["demo: pending.json 有 2 条待回填（best-so-far 仍按已观测计算）"]
+}

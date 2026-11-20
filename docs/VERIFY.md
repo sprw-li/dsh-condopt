@@ -3,20 +3,21 @@
 契约：[`../DESIGN.md`](../DESIGN.md) §8。本文件给每条检查**可复制的命令、期望输出、当前实测结果、已知限制**。
 除 A7 外都不需要 GUI；A2/A3 是离线 harness（真加载被测文件，不做字符串匹配式假测试）。
 
-> 本文的“最终实测”= **2026-11-20 v2.0 冻结快照**（`index.js` sha `0D29CAEB…`、`client.js` sha `42109921…`）：
+> **当前实测（v3.0 第二波，DESIGN §8.7 + §8.8）**：
 > - **A1** `node --check index.js|client.js` → 双 exit 0
-> - **A2** 真实仓库（DSH 沙箱）：`277/283 通过，0 失败，6 SKIP`；**可写根跑：`315/315，0 失败，0 SKIP`**
-> - **A3** `100/100，0 失败`（完全离线，与检出位置无关）
+> - **A2** 真实仓库（DSH 沙箱）：`342/349 通过，0 失败，7 SKIP`；**可写根跑：`382/382，0 失败，0 SKIP`**
+>   （SKIP 是沙箱禁写 `runs/` 的整组占位：6 组真写入 + 1 组 >400 点降采样）
+> - **A3** `149/149，0 失败`（完全离线，与检出位置无关）
 > - **A7** ask→tell 垂直切片真机全绿（见 A7 节）；`tell` 临时文件实测残留 = 0
 >
 > A2 的数字随「有没有 condopt 检出 / `runs/` 可不可写」变化（三条自测表见 A2 节）：独立 clone 无检出 =
-> `203/222 + 19 SKIP`，指向检出 = `303/309 + 6 SKIP`（沙箱）/ `342/342`（真仓库可写）。Lead 的 danger-full-access
-> 首次 `307/307` 是后补 15 条断言（激活惰性 +6、辅助导出 +9）之前的数。
+> `203/224 + 21 SKIP`，指向检出 = `341/348 + 7 SKIP`（沙箱）/ `382/382`（真仓库可写）。
 >
-> **v3.0 第一波（DESIGN §8.7）已补断言并跑绿**（`index.js 78C23FC3…`、`client.js ECDAAC44…`）：
-> A1 双 exit 0；A2 `304/310 + 6 SKIP`（可写 `342/342`）；A3 `127/127`。新增断言表见「A2/A3 的 v3.0 第一波」节。
+> 历史快照：**v2.0** A1 双 exit 0 / A2 沙箱 `277/283 + 6 SKIP`（可写 `315/315`）/ A3 `100/100`；
+> **v3.0 第一波（§8.7）** A2 `304/310 + 6 SKIP`（可写 `342/342`）/ A3 `127/127`（证据 `index.js 78C23FC3…`、`client.js ECDAAC44…`）；
+> **v1.4** A2 234/234、A3 70/70、`--skip-real` 206/206、A5 17/19、A7 接口全 200。
 >
-> v1.4 冻结快照（更早一轮，供对照）：A2 234/234、A3 70/70、`--skip-real` 206/206、A5 17/19、A7 接口全 200。
+> 新增断言表见「A2/A3 的 v3.0 第一波」与「A2/A3 的 v3.0 第二波」两节。
 
 ## 0. 一分钟全量
 
@@ -56,7 +57,7 @@ $env:DSH_CONDOPT_SKIP_REAL='1'; node dev/verify-host.mjs; Remove-Item Env:DSH_CO
   `[分组] 断言名 / 期望 / 实际` 并以 exit 1 收尾。
 - **当前结果（v2.0）**：真实仓库（沙箱）**277/283 通过，0 失败，6 SKIP**；指向可写临时根 **315/315，0 失败，0 SKIP**
   —— 那 6 组真写入（expect 放行/不校验、tell 三形态、临时文件清理）在可写环境全部真跑。v1.4 快照为 234/234。
-- **当前结果（v3.0 第一波）**：真实仓库（沙箱）**304/310 + 6 SKIP**；可写临时根 **342/342 + 0 SKIP**。
+- **当前结果（v3.0）**：真实仓库（沙箱）**342/349 + 7 SKIP**；可写临时根 **382/382 + 0 SKIP**。
 
 **位置无关的 condopt 根解析（发布仓库自证 / fresh clone）**
 
@@ -68,22 +69,22 @@ harness 按 **`DSH_CONDOPT_VERIFY_ROOT` → `CONDOPT_ROOT` → 插件目录的�
 
 | 场景 | 命令 | 结果 |
 |---|---|---|
-| (a) 真仓库 | `node dev/verify-host.mjs`（本仓库，沙箱） | `304/310，0 失败，6 SKIP`，exit 0 |
-| (a') 真仓库可写 | `DSH_CONDOPT_VERIFY_ROOT=<可写临时根>` | `342/342，0 失败，0 SKIP`，exit 0 |
-| (b) 独立 clone、无环境变量、旁边无检出 | `node dev/verify-host.mjs` | `203/222，0 失败，19 SKIP`，exit 0；无崩溃 |
-| (c) 独立 clone + 指向检出 | `DSH_CONDOPT_VERIFY_ROOT=<condopt 仓库>`（或 `CONDOPT_ROOT`） | `303/309，0 失败，6 SKIP`（沙箱）；指向可写临时根则 0 SKIP |
+| (a) 真仓库 | `node dev/verify-host.mjs`（本仓库，沙箱） | `342/349，0 失败，7 SKIP`，exit 0 |
+| (a') 真仓库可写 | `DSH_CONDOPT_VERIFY_ROOT=<可写临时根>` | `382/382，0 失败，0 SKIP`，exit 0 |
+| (b) 独立 clone、无环境变量、旁边无检出 | `node dev/verify-host.mjs` | `203/224，0 失败，21 SKIP`，exit 0；无崩溃 |
+| (c) 独立 clone + 指向检出 | `DSH_CONDOPT_VERIFY_ROOT=<condopt 仓库>`（或 `CONDOPT_ROOT`） | `341/348，0 失败，7 SKIP`（沙箱）；指向可写临时根则 0 SKIP |
 
 ```powershell
 # (b) 独立 clone 的最朴素跑法：不设任何环境变量也能 exit 0（真 CLI 断言 SKIP）
-node dev/verify-client.mjs        # 完全离线，127/127
+node dev/verify-client.mjs        # 完全离线，149/149
 node dev/verify-host.mjs
 # (c) 指一个 condopt 检出（或可写临时根）即可全跑
 $env:DSH_CONDOPT_VERIFY_ROOT = 'D:\path\to\condopt'; node dev/verify-host.mjs; Remove-Item Env:DSH_CONDOPT_VERIFY_ROOT
 ```
 
-> **为什么“可写”的总数比“沙箱”大（310 → 342）**：`SKIP` 是**整组占位**（每组 1 条结果），一旦
+> **为什么“可写”的总数比“沙箱”大（349 → 382）**：`SKIP` 是**整组占位**（每组 1 条结果），一旦
 > `runs/` 可写，这 6 组会展开成 38 条真断言（expect 放行/不校验 + tell 三形态 receipt 全字段 + 临时文件清理）。
-> 因此口径是：**受限沙箱 `304/310 + 6 SKIP`；可写环境 `342/342 + 0 SKIP`**（v2.0 时对应 283 → 315，同一原因）。
+> 因此口径是：**受限沙箱 `342/349 + 7 SKIP`；可写环境 `382/382 + 0 SKIP`**（v3.0 第一波时是 310 → 342，v2.0 时是 283 → 315，同一原因）。
 
 ```powershell
 # 想在沙箱里也跑真写入组：造一个可写临时根再指过去
@@ -124,7 +125,7 @@ node dev/verify-client.mjs
 ```
 
 - 期望：末尾 `verify-client: N/N 通过，0 失败`，exit 0。
-- **当前结果（v2.0）：PASS，100/100，0 失败**；**（v3.0 第一波）：PASS，127/127，0 失败**（v1.4 快照为 70/70）。
+- **当前结果（v2.0）：PASS，100/100**；**（v3.0 第一波）：127/127**；**（v3.0 第二波）：149/149，0 失败**（v1.4 快照为 70/70）。
 - 技法：`node:vm` + stub `window.__ModuleLoader__`/`document`/`fetch`/最小 React（`createElement`、
   hooks、`Fragment`、`forwardRef`…），hooks 按组件函数身份分槽，`plugin.apply(假 Cordis ctx)` 后真的渲染面板。
 - 覆盖的断言组：
@@ -203,7 +204,38 @@ v2.0 的断言就在同两条命令里跑（`node dev/verify-host.mjs` / `node d
 | 设置页 | `settings.section`（`id:'condopt'`、`order:60`）注册、渲染不抛、读 `/api/diagnostics`、`configForms` 缺失给说明、只读无 POST |
 | 源码级 | `client.js` 全文 **不含 `attachShadow`**（DESIGN §8.7 I） |
 
-- **当前结果**：Host（A2）`304/310 通过，0 失败，6 SKIP`（可写临时根 `342/342`；6 组真写入因沙箱禁写 `runs/`）；Client（A3）`127/127 通过，0 失败`。证据 sha：`index.js 78C23FC3…`、`client.js ECDAAC44…`。
+- **当前结果**：Host（A2）`342/349 通过，0 失败，7 SKIP`（可写临时根 `382/382`；真写入与 >400 点降采样因沙箱禁写 `runs/` 而降级）；Client（A3）`149/149 通过，0 失败`。证据 sha：`index.js 3D9C67F3…`、`client.js B7AE7D12…`（T10/T11 冻结后）。
+
+## A2/A3 的 v3.0 第二波新增断言（DESIGN §8.8 K/L/M）
+
+**Host（A2）**
+
+| 组 | 断言要点 |
+|---|---|
+| `/api/compare` 形状 | `?runs=demo,demo_moo` → 200；`runs[]` 含 11 字段（`id/rel/algorithm/objective/direction/budget/nObservations/pendingCount/best/stateToken/series`）且 `series` 为 `{t,best}`；`warnings[]` |
+| best-so-far 正确性 | 独立读 `dataset.jsonl` + `problem.json` 的 `direction` 重算 running max/min，**逐点**比对 `series[].best`（含末点 = `run.best`）、断言与 direction 单调一致 |
+| 降采样 | 造 500 行 dataset 的 run（需可写 `runs/`）：`series.length ≤ 400` 且 `warnings` 注明降采样 |
+| 容错 | 不存在的 run：从 `runs` 省略 + `warnings` 且整体仍 200；`runs` 数量 <2 或 >8（含缺参）→ 400 `bad-param` |
+| 只读硬证明 | 调用前后 `demo`/`demo_moo` 目录**逐文件 mtime/size 不变**；注入记录型 spawn → **0 次 spawn** |
+| `condopt_draft` 注册 | `apply` 注册 2 个工具；`condopt_draft.isConcurrencySafe() === true`；`kind` 枚举 = ask/tell/override |
+| 三种 kind 的 payload | ask：`{command:'ask', params:{n,plate}}` + `payload.expect` = 当前 `stateToken` 且 `params` 内**无** `expect`；tell：`resultsText` 原样 + 顶层 `expect` + `preview.{rows,format}`；override：`params.{algorithm,params,reason}` + 顶层 `expect` + `preview.changedFields` |
+| warnings 覆盖 | id 不在 pending；行数 > 5000；`resultsText` 不可解析；`override` 无 `reason`；`algorithm` 不在 spec；run 不存在（都不抛） |
+| 只读硬证明 | 全部 draft 调用前后 `demo`/`flow2` 目录逐文件 mtime/size 不变 |
+
+**Client（A3）**
+
+| 组 | 断言要点 |
+|---|---|
+| 草稿卡 | `tool.call.toolview` 登记 `condopt_draft`（`condopt_view` 仍在）；草稿卡渲染不抛；有「在面板中打开并预填」按钮 |
+| 预填交接 | 点按钮 → 参数页 tell `textarea.value === 草稿原文`，且**全程 0 个 `POST /api/exec`**（仍需用户确认） |
+| 交接消费一次即清 | **卸载重挂**（resetAllHooks + 重新挂载）后：回到默认「**摘要**」页（草稿不再抢 pane）、表单**不被二次覆盖**（无 textarea 等于草稿原文）、**仍选中交接的 study**（`/api/study?run=…demo`）、仍**零 POST** |
+| 对比页 | 切到「对比」子页签渲染对比块；checkbox 多选；逐个勾选 2 个 run（每次重建组件树，规避闭包旧值）→ **恰好 1 次 `/api/compare`** 且 `runs=` 带两个 id；渲染表格元素 + `svg`/`polyline`；显示 fixture 的 warnings 原文；「复制对比 Markdown」写入剪贴板且含两个 run 与表头 |
+| 失败态 | `/api/compare` 抛错 → 错误文案，组件不抛 |
+
+- **当前结果（v3.0 第二波）**：Host（A2）`342/349，0 失败，7 SKIP`（可写临时根 `382/382`，0 SKIP）；Client（A3）`149/149，0 失败`。
+- **（已修）交接通道重复预填**：第一版 client.js 的模块级 `pendingSelection` 赋值后未清除，面板每次挂载都会重新 `apply`，
+  导致草稿预填随重挂重复生效并把 pane 拉回参数页。T11 已修为**消费一次即清**（应用时机移到活着组件的 effect），
+  上面「交接消费一次即清」一行就是它的回归断言（卸载重挂后回摘要页、不二次覆盖、仍选中交接 study、零 POST）。
 
 ## A4 真实视图管线（纯读）
 
@@ -304,4 +336,7 @@ node dev/verify-client.mjs *> verify-client.log
 ```
 
 日志里每行 `ok/FAIL/SKIP/NOTE` 都带断言名，足以逐条对账；`FAIL` 行同时给出「期望/实际」。
+
+
+
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-condopt",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": false,
   "description": "把 condopt 的条件优化内容视图搬进 DeepSeek Harness：右侧栏面板 + /condopt 命令 + 只读工具 condopt_view；前端骨架复用 dsh-model-council。",
   "license": "MIT",

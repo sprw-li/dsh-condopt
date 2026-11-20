@@ -162,10 +162,28 @@ stateTokenBefore,stateTokenAfter}`（前后计数由宿主自行读 run 目录�
   2. **客户端注册结果**：每个 slot/命令/工具注册成功或跳过的原因；
   3. **配置方式**：`CONDOPT_ROOT`/`CONDOPT_PYTHON`/config `projectRoot|python|allowExec`；有 `configForms` 时内嵌表单，否则只给说明。
 
+## v3.0 第二波用法（草稿工具 / 跨 run 对比）
+
+- **`condopt_draft`（只读草稿工具，agent 侧只有它和 `condopt_view`）**：
+  `{root?, run?, kind:'ask'|'tell'|'override', n?, plate?, resultsText?, observations?, algorithm?, params?, reason?}`
+  → `{kind, run, root, payload:{command, params, expect?}, preview, warnings, text}`。
+  `payload` 与面板将发给 `/api/exec` 的**同一形状**（`expect` = 当前 `stateToken`，且 `params` 内不含 `expect`）；
+  工具**不执行、不写 run 目录、不调 exec**。`warnings` 覆盖：结果 id 不在 pending、行数 > 5000、
+  `algorithm` 不在 spec、`override` 无 `reason`、run 不存在、`resultsText` 无法解析。
+  工具卡按钮「**在面板中打开并预填**」把草稿交给面板（tell → textarea；ask → `n`/`plate`；override → 算法/参数/reason），
+  **仍然要用户点确认**才会 `POST /api/exec`。
+- **对比页**：`GET /condopt/api/compare?runs=a,b,c`（2–8 个，逐个走 `resolveRunDir` 围栏）→
+  `{ok, runs:[{id,rel,algorithm,objective,direction,budget,nObservations,pendingCount,best,stateToken,series:[{t,best}]}], warnings}`；
+  `series` 是 **best-so-far**（按 `direction` 取 max/min），**直接读文件、不 spawn CLI、不渲染 HTML**，点数 ≤ 400
+  （超出等距降采样并在 `warnings` 注明）；缺文件/越界 run 记 `warnings` 并从 `runs` 省略，整体仍 200，
+  `runs` 数量 <2 或 >8 → 400 `bad-param`。面板「对比」页多选 2–8 个 run → 表格（算法/目标/预算/观测数/待回填/最优/令牌前 8）
+  + 客户端 SVG 叠加折线（best-so-far）+「复制对比 Markdown」。
+
 ## agent 工具
 
-`condopt_view`：`{root?, run?, include?}`（`include` 枚举 `report|step|pending|decisions|pareto`，
-省略=全部但不含 `step`）。只读，返回 `{text, run, root, view, warnings}`。
+- `condopt_view`：`{root?, run?, include?}`（`include` 枚举 `report|step|pending|decisions|pareto`，
+  省略=全部但不含 `step`）。只读，返回 `{text, run, root, view, warnings}`。
+- `condopt_draft`：只读草稿（见上）。**agent 侧没有任何写工具**——所有写操作都要人在面板里确认。
 
 ## 验收
 
@@ -176,7 +194,7 @@ stateTokenBefore,stateTokenAfter}`（前后计数由宿主自行读 run 目录�
 ```powershell
 cd dsh-plugin
 node --check index.js; node --check client.js     # A1
-node dev/verify-client.mjs                        # A3：node:vm 加载 client.js，127 条断言（完全离线）
+node dev/verify-client.mjs                        # A3：node:vm 加载 client.js，149 条断言（完全离线）
 node dev/verify-host.mjs                          # A2：真加载 index.js
 node dev/verify-host.mjs --skip-real              # 不跑 python 的纯离线模式
 ```
@@ -185,9 +203,9 @@ A2 的三种典型结果（都是 exit 0）：
 
 | 场景 | 结果 |
 |---|---|
-| 真仓库（`link:` 安装布局） | 受限沙箱 `304/310 + 6 SKIP`；**可写环境 `342/342 + 0 SKIP`**（6 组 SKIP 展开为 38 条真断言，口径同 v2.0 的 283→315） |
-| 独立 clone、**没设环境变量**、旁边没有 condopt 检出 | `203/222 + 19 SKIP`——导出面/纯函数/解析/路由分派/诊断 等离线断言照跑，真 CLI 与写路径以明确原因 SKIP |
-| 独立 clone + `DSH_CONDOPT_VERIFY_ROOT=<condopt 仓库>`（或 `CONDOPT_ROOT`） | `303/309 + 6 SKIP`（沙箱，仅剩 6 组写路径）；指向可写临时根则 0 SKIP |
+| 真仓库（`link:` 安装布局） | 受限沙箱 `342/349 + 7 SKIP`；**可写环境 `382/382 + 0 SKIP`**（SKIP 组展开为真断言，口径同 v2.0 的 283→315） |
+| 独立 clone、**没设环境变量**、旁边没有 condopt 检出 | `203/224 + 21 SKIP`——导出面/纯函数/解析/路由分派/诊断 等离线断言照跑，真 CLI 与写路径以明确原因 SKIP |
+| 独立 clone + `DSH_CONDOPT_VERIFY_ROOT=<condopt 仓库>`（或 `CONDOPT_ROOT`） | `341/348 + 7 SKIP`（沙箱）；指向可写临时根则 0 SKIP |
 
 其余门禁（A4 真实渲染、A5 仓库门禁、A6 独立性、A7 真机 GUI）见 [`docs/VERIFY.md`](docs/VERIFY.md)。
 
@@ -210,3 +228,4 @@ A2 的三种典型结果（都是 exit 0）：
 - `render` 对 `demo_moo` 实测约 2s（`--no-png`）：视图走缓存 + 30s 自动刷新，不在请求内重算。
 - 依赖 condopt CLI 的 `--json` 输出；CLI 出错时 JSON 可能落在 stderr，host 两侧都解析，解析不了给 `data:null`。
 - DSH 版本漂移（slot/服务名变化）时客户端全部 feature detect：拿不到服务就跳过注册，不抛。
+

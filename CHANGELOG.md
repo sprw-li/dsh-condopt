@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.0 — 2026-11-21（v3.0 第二波，评审 #2 + #4 最小版）
+
+- **草稿型 agent 工具 `condopt_draft`**（只读，`isConcurrencySafe`）：`kind: ask|tell|override` →
+  `{kind, run, root, payload:{command, params, expect?}, preview, warnings, text}`。`payload` 与面板发给
+  `/api/exec` 的形状一致（`expect` = 当前 `stateToken`，`params` 内不含 expect）；工具**不执行、不写 run 目录**。
+  `warnings` 覆盖 id 不在 pending / 行数 > 5000 / algorithm 不在 spec / override 无 reason / run 不存在 / 解析失败。
+  工具卡「在面板中打开并预填」把草稿交给面板（tell → textarea 等），**仍需用户确认**才执行；agent 侧只有
+  `condopt_view` + `condopt_draft` 两个只读工具，**没有任何写工具**。
+- **跨 run 对比 `GET /condopt/api/compare?runs=a,b,c`**（2–8 个，逐个走 `resolveRunDir` 围栏）：
+  逐 run 回 `{id,rel,algorithm,objective,direction,budget,nObservations,pendingCount,best,stateToken,series}`，
+  `series` = best-so-far（按 direction 取 max/min，**直接读文件、零 spawn、零写入**，点数 ≤400 超出等距降采样并在
+  `warnings` 注明）；缺文件/越界 run 省略 + warning 且整体仍 200；数量越界 → 400 `bad-param`。
+  面板新增「对比」子页签：多选 run + 表格 + 客户端 SVG best-so-far 折线 + 复制对比 Markdown。
+- 第一波（诊断页 / 摘要默认 / sandboxed iframe）行为不变；命令白名单与写路径不变。
+- **修复**：草稿交接通道消费一次即清（第一版每次重新挂载都会重复预填并把 pane 拉回参数页）。
+- 验收：A1 双 exit 0；A2 `342/349 + 7 SKIP`（受限沙箱；可写环境 `382/382`）；A3 `149/149`。
+
 ## 0.3.0 — 2026-11-20（v3.0 第一波，评审 #3 后半 + #5）
 
 - **诊断页**：`GET /condopt/api/diagnostics`（只读、不渲染、不写 run 目录）逐级列出**七级 root 候选**
@@ -32,3 +49,4 @@
   浏览器侧右侧栏「条件优化」tab、`/condopt` 命令、`tool.call.toolview` 卡；视图把 condopt 自己的
   `dashboard.html` 写进 shadow DOM；17 条命令白名单 + 参数校验，默认零写入 run 目录。
 - 根目录七级解析（含「插件自身目录的上一级」，`link:` 安装开箱即用）。
+
