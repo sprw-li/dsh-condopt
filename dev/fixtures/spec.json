@@ -1,0 +1,163 @@
+[
+  {
+    "name": "bayes",
+    "family": "model_based",
+    "summary": "GP 贝叶斯优化：用高斯过程代理 + 采集函数（EI/UCB/PI/TS）平衡探索与利用，样本效率最高。",
+    "when": "目标昂贵（每次实验成本高）、预算 10–200、维度 ≤15、目标较光滑、连续/顺序型条件为主时。",
+    "capabilities": [
+      "batch",
+      "categorical",
+      "continuous",
+      "expensive",
+      "mixed",
+      "model_based",
+      "noisy"
+    ],
+    "params": [
+      {
+        "name": "kernel",
+        "type": "choice",
+        "default": "matern52",
+        "choices": [
+          "matern52",
+          "matern32",
+          "rbf"
+        ],
+        "description": "GP 核函数；matern52 通用，matern32 更粗糙，rbf 最光滑但易过拟合"
+      },
+      {
+        "name": "length_scale",
+        "type": "float",
+        "default": 0.3,
+        "low": 0.01,
+        "high": 10.0,
+        "description": "初始特征长度尺度（单位立方体坐标）；ARD 开启时为所有特征的初值"
+      },
+      {
+        "name": "ard",
+        "type": "bool",
+        "default": true,
+        "description": "是否使用 ARD（每特征一个 length_scale）；混合/高基数空间建议开启"
+      },
+      {
+        "name": "alpha",
+        "type": "float",
+        "default": 1e-06,
+        "low": 1e-12,
+        "high": 1.0,
+        "description": "观测噪声方差（测量噪声的方差，不是标准差）；噪声大时用 0.01–0.1"
+      },
+      {
+        "name": "n_initial",
+        "type": "int",
+        "default": 0,
+        "low": 0,
+        "high": 200,
+        "description": "初始设计点数；0 表示自动 = max(3, min(feature_dim+1, 20))"
+      },
+      {
+        "name": "n_candidates",
+        "type": "int",
+        "default": 1024,
+        "low": 64,
+        "high": 65536,
+        "description": "每次采集时评估的候选点数；越大越准越慢"
+      },
+      {
+        "name": "acquisition",
+        "type": "choice",
+        "default": "ei",
+        "choices": [
+          "ei",
+          "logei",
+          "ucb",
+          "pi",
+          "ts"
+        ],
+        "description": "采集函数：ei/logei 平衡探索利用，ucb 更偏探索，pi 偏利用，ts 用后验采样"
+      },
+      {
+        "name": "kappa",
+        "type": "float",
+        "default": 2.0,
+        "low": 0.0,
+        "high": 10.0,
+        "description": "UCB 的探索系数"
+      },
+      {
+        "name": "xi",
+        "type": "float",
+        "default": 0.01,
+        "low": 0.0,
+        "high": 1.0,
+        "description": "EI/PI 的改进阈值"
+      },
+      {
+        "name": "batch_strategy",
+        "type": "choice",
+        "default": "local_penalty",
+        "choices": [
+          "greedy",
+          "kriging_believer",
+          "constant_liar",
+          "local_penalty"
+        ],
+        "description": "批量选点：local_penalty（推荐）/贪心/信念值/常数谎言；批量≥4 用前者避免扎堆"
+      },
+      {
+        "name": "local_frac",
+        "type": "float",
+        "default": 0.3,
+        "low": 0.0,
+        "high": 0.9,
+        "description": "候选池中围绕当前最优点的局部采样比例"
+      },
+      {
+        "name": "local_sigma",
+        "type": "float",
+        "default": 0.15,
+        "low": 0.01,
+        "high": 1.0,
+        "description": "局部候选的单位立方体扰动标准差"
+      }
+    ],
+    "references": [
+      "Jones, Schonlau & Welch, Efficient Global Optimization of Expensive Black-Box Functions, JOGO 1998",
+      "Srinivas, Krause, Kakade & Seeger, Gaussian Process Optimization in the Bandit Setting (GP-UCB), ICML 2010",
+      "Rasmussen & Williams, Gaussian Processes for Machine Learning, MIT Press 2006",
+      "Balandat et al., BoTorch: A Framework for Efficient Monte-Carlo Bayesian Optimization, NeurIPS 2020"
+    ]
+  },
+  {
+    "name": "sobol",
+    "family": "sampling",
+    "summary": "Sobol 低差异序列：空间填充比随机更均匀，适合批量初始设计与中等维度。",
+    "when": "需要均匀覆盖空间（初始设计、批量并行实验）、预算 8–50、维度 ≤20。",
+    "capabilities": [
+      "batch",
+      "categorical",
+      "cheap",
+      "mixed",
+      "model_free",
+      "space_filling"
+    ],
+    "params": [
+      {
+        "name": "scramble",
+        "type": "bool",
+        "default": true,
+        "description": "是否使用随机化（scrambled）Sobol"
+      },
+      {
+        "name": "dedupe",
+        "type": "bool",
+        "default": true,
+        "description": "是否避开已经评价过的配置（序列重启时可能撞点）"
+      }
+    ],
+    "references": [
+      "Sobol, On the distribution of points in a cube and the approximate evaluation of integrals, 1967",
+      "scipy.stats.qmc.Sobol documentation"
+    ]
+  }
+]

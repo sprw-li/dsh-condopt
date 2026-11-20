@@ -1,0 +1,21 @@
+{
+  "run": "runs/demo_moo",
+  "ok": true,
+  "argv": ["tell", "--run", "runs/demo_moo", "--results", "C:\\temp\\dsh-condopt-tell\\abc\\results-1.jsonl", "--json"],
+  "exitCode": 0,
+  "stdout": "{\"accepted\":2}",
+  "stderr": "",
+  "data": { "accepted": 2 },
+  "receipt": {
+    "run": "runs/demo_moo",
+    "resultsRows": 2,
+    "format": "jsonl",
+    "pendingBefore": 2,
+    "pendingAfter": 0,
+    "datasetBefore": 24,
+    "datasetAfter": 26,
+    "acceptedRows": 2,
+    "stateTokenBefore": "0123456789abcdef",
+    "stateTokenAfter": "fedcba9876543210"
+  }
+}

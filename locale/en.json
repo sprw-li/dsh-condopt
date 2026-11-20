@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Condition optimization",
+    "description": "Open the condopt panel in the right sidebar: read the optimization dashboard, tune algorithm and batch parameters, and audit the decision timeline. Every write happens only on an explicit click."
+  }
+}

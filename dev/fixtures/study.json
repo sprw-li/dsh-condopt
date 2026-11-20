@@ -1,0 +1,74 @@
+{
+  "run": "demo_moo",
+  "report": {
+    "run_dir": "runs\\demo_moo",
+    "algorithm": "parego",
+    "params": {
+      "rho": 0.05,
+      "weight_alpha": 1.0,
+      "acquisition": "logei",
+      "n_initial": 6,
+      "n_candidates": 1024,
+      "alpha": 0.0001,
+      "length_scale": 0.3,
+      "noise_aware": true
+    },
+    "budget": 24,
+    "used": 24,
+    "pending": 0,
+    "manual_override": false,
+    "remaining": 0,
+    "best": {
+      "x": { "T": 81.02210239205559, "time": 54.16001727958745 },
+      "y": null,
+      "objectives": { "yield": 89.95560808793654, "cost": 10.810211103184933 },
+      "source": "simulation"
+    },
+    "best_score": 89.95560808793654,
+    "decision": {
+      "selection_basis": "pareto_knee",
+      "selection_reason": "Pareto 前沿上离 utopia 最近的 knee",
+      "plate_effect_detected": false
+    }
+  },
+  "decisions": {
+    "run_dir": "runs\\demo_moo",
+    "n": 1,
+    "decisions": [
+      {
+        "t": 1793872203.7460704,
+        "action": "initial_route",
+        "algorithm": "parego",
+        "reason": "2 个目标，ParEGO 是当前内置的多目标算法；预算 24 次",
+        "seq": 1,
+        "actor": "unknown"
+      }
+    ]
+  },
+  "pareto": {
+    "run_dir": "runs\\demo_moo",
+    "out": "C:\\temp\\dsh-condopt\\demo_moo\\pareto_front.csv",
+    "n_front": 13,
+    "hypervolume": 664.2912501968362,
+    "reference_point": [60.0, -30.0]
+  },
+  "pending": {
+    "run_dir": "runs\\demo_moo",
+    "n_pending": 0,
+    "pending": []
+  },
+  "step": null,
+  "stateToken": "0123456789abcdef",
+  "current": {
+    "algorithm": "parego",
+    "params": { "rho": 0.05, "weight_alpha": 1.0, "acquisition": "logei" },
+    "objective": "yield:max,cost:min",
+    "direction": "max",
+    "budget": 24,
+    "batch": 6,
+    "nObservations": 24,
+    "pendingCount": 0,
+    "remaining": 0
+  },
+  "warnings": []
+}

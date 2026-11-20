@@ -1,0 +1,9 @@
+{
+  "root": "<condopt-root>",
+  "ok": true,
+  "python": ["py", "-3"],
+  "version": "0.1.0",
+  "runsDir": "<condopt-root>\\runs",
+  "cli": "<condopt-root>\\scripts\\run_condopt.py",
+  "allowExec": true
+}

@@ -1,0 +1,37 @@
+{
+  "root": "<condopt-root>",
+  "runs": [
+    {
+      "id": "demo_moo",
+      "rel": "runs/demo_moo",
+      "abs": "<condopt-root>\\runs\\demo_moo",
+      "mtime": 1793872203746,
+      "nObservations": 24,
+      "algorithm": "parego",
+      "objective": "yield:max,cost:min",
+      "budget": 24,
+      "best": {
+        "x": { "T": 81.02210239205559, "time": 54.16001727958745 },
+        "y": null,
+        "objectives": { "yield": 89.95560808793654, "cost": 10.810211103184933 },
+        "source": "simulation"
+      }
+    },
+    {
+      "id": "demo",
+      "rel": "runs/demo",
+      "abs": "<condopt-root>\\runs\\demo",
+      "mtime": 1793871000000,
+      "nObservations": 12,
+      "algorithm": "bayes",
+      "objective": "yield:max",
+      "budget": 12,
+      "best": {
+        "x": { "T": 70.5, "time": 30.0 },
+        "y": 88.1,
+        "objectives": { "yield": 88.1 },
+        "source": "simulation"
+      }
+    }
+  ]
+}

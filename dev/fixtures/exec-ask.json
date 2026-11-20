@@ -1,0 +1,9 @@
+{
+  "run": "demo_moo",
+  "ok": true,
+  "argv": ["ask", "--run", "demo_moo", "--n", "8", "--plate", "P2", "--json"],
+  "exitCode": 0,
+  "stdout": "{\"run_dir\":\"runs\\\\demo_moo\",\"n_conditions\":8,\"plate\":\"P2\"}",
+  "stderr": "",
+  "data": { "run_dir": "runs\\demo_moo", "n_conditions": 8, "plate": "P2" }
+}

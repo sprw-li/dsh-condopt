@@ -1,0 +1,11 @@
+{
+  "run": "demo_moo",
+  "rel": "runs/demo_moo",
+  "abs": "<condopt-root>\\runs\\demo_moo",
+  "generatedAt": "2026-11-19T15:00:00.000Z",
+  "cached": false,
+  "bytes": 2148,
+  "css": "/* FIXTURE_STYLE_ONE */\n:root{--bg:#f6f7f9;--ink:#1d2330}\n/* FIXTURE_STYLE_TWO */\n#condopt-fixture-marker{color:#2f6feb;font-weight:700}",
+  "html": "<header class=\"condopt-top\"><h1>condopt 看板 · demo_moo</h1></header><main><div id=\"condopt-fixture-marker\">FIXTURE_VIEW_BODY</div><p class=\"muted\">Pareto 前沿 13 点 · HV=664.29</p></main>",
+  "warnings": []
+}
