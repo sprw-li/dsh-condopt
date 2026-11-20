@@ -10,8 +10,11 @@
 > - **A7** ask→tell 垂直切片真机全绿（见 A7 节）；`tell` 临时文件实测残留 = 0
 >
 > A2 的数字随「有没有 condopt 检出 / `runs/` 可不可写」变化（三条自测表见 A2 节）：独立 clone 无检出 =
-> `199/217 + 18 SKIP`，指向检出 = `276/282 + 6 SKIP`（沙箱）/ `314/314`（可写）。Lead 的 danger-full-access
-> 首次 `307/307` 是后补 15 条断言（激活惰性 +6、辅助导出 +9）之前的数，当前真仓库可写布局总数是 `315`。
+> `203/222 + 19 SKIP`，指向检出 = `303/309 + 6 SKIP`（沙箱）/ `342/342`（真仓库可写）。Lead 的 danger-full-access
+> 首次 `307/307` 是后补 15 条断言（激活惰性 +6、辅助导出 +9）之前的数。
+>
+> **v3.0 第一波（DESIGN §8.7）已补断言并跑绿**（`index.js 78C23FC3…`、`client.js ECDAAC44…`）：
+> A1 双 exit 0；A2 `304/310 + 6 SKIP`（可写 `342/342`）；A3 `127/127`。新增断言表见「A2/A3 的 v3.0 第一波」节。
 >
 > v1.4 冻结快照（更早一轮，供对照）：A2 234/234、A3 70/70、`--skip-real` 206/206、A5 17/19、A7 接口全 200。
 
@@ -53,6 +56,7 @@ $env:DSH_CONDOPT_SKIP_REAL='1'; node dev/verify-host.mjs; Remove-Item Env:DSH_CO
   `[分组] 断言名 / 期望 / 实际` 并以 exit 1 收尾。
 - **当前结果（v2.0）**：真实仓库（沙箱）**277/283 通过，0 失败，6 SKIP**；指向可写临时根 **315/315，0 失败，0 SKIP**
   —— 那 6 组真写入（expect 放行/不校验、tell 三形态、临时文件清理）在可写环境全部真跑。v1.4 快照为 234/234。
+- **当前结果（v3.0 第一波）**：真实仓库（沙箱）**304/310 + 6 SKIP**；可写临时根 **342/342 + 0 SKIP**。
 
 **位置无关的 condopt 根解析（发布仓库自证 / fresh clone）**
 
@@ -64,18 +68,22 @@ harness 按 **`DSH_CONDOPT_VERIFY_ROOT` → `CONDOPT_ROOT` → 插件目录的�
 
 | 场景 | 命令 | 结果 |
 |---|---|---|
-| (a) 真仓库 | `node dev/verify-host.mjs`（本仓库，沙箱） | `277/283，0 失败，6 SKIP`，exit 0 |
-| (a') 真仓库可写 | `DSH_CONDOPT_VERIFY_ROOT=<可写临时根>` | `315/315，0 失败，0 SKIP`，exit 0 |
-| (b) 独立 clone、无环境变量、旁边无检出 | `node dev/verify-host.mjs` | `199/217，0 失败，18 SKIP`，exit 0；无崩溃 |
-| (c) 独立 clone + 指向检出 | `DSH_CONDOPT_VERIFY_ROOT=<condopt 仓库>`（或 `CONDOPT_ROOT`） | `276/282，0 失败，6 SKIP`（沙箱）；指向可写临时根 `314/314` |
+| (a) 真仓库 | `node dev/verify-host.mjs`（本仓库，沙箱） | `304/310，0 失败，6 SKIP`，exit 0 |
+| (a') 真仓库可写 | `DSH_CONDOPT_VERIFY_ROOT=<可写临时根>` | `342/342，0 失败，0 SKIP`，exit 0 |
+| (b) 独立 clone、无环境变量、旁边无检出 | `node dev/verify-host.mjs` | `203/222，0 失败，19 SKIP`，exit 0；无崩溃 |
+| (c) 独立 clone + 指向检出 | `DSH_CONDOPT_VERIFY_ROOT=<condopt 仓库>`（或 `CONDOPT_ROOT`） | `303/309，0 失败，6 SKIP`（沙箱）；指向可写临时根则 0 SKIP |
 
 ```powershell
 # (b) 独立 clone 的最朴素跑法：不设任何环境变量也能 exit 0（真 CLI 断言 SKIP）
-node dev/verify-client.mjs        # 完全离线，100/100
+node dev/verify-client.mjs        # 完全离线，127/127
 node dev/verify-host.mjs
 # (c) 指一个 condopt 检出（或可写临时根）即可全跑
 $env:DSH_CONDOPT_VERIFY_ROOT = 'D:\path\to\condopt'; node dev/verify-host.mjs; Remove-Item Env:DSH_CONDOPT_VERIFY_ROOT
 ```
+
+> **为什么“可写”的总数比“沙箱”大（310 → 342）**：`SKIP` 是**整组占位**（每组 1 条结果），一旦
+> `runs/` 可写，这 6 组会展开成 38 条真断言（expect 放行/不校验 + tell 三形态 receipt 全字段 + 临时文件清理）。
+> 因此口径是：**受限沙箱 `304/310 + 6 SKIP`；可写环境 `342/342 + 0 SKIP`**（v2.0 时对应 283 → 315，同一原因）。
 
 ```powershell
 # 想在沙箱里也跑真写入组：造一个可写临时根再指过去
@@ -116,7 +124,7 @@ node dev/verify-client.mjs
 ```
 
 - 期望：末尾 `verify-client: N/N 通过，0 失败`，exit 0。
-- **当前结果（v2.0）：PASS，100/100，0 失败**（v1.4 快照为 70/70）。
+- **当前结果（v2.0）：PASS，100/100，0 失败**；**（v3.0 第一波）：PASS，127/127，0 失败**（v1.4 快照为 70/70）。
 - 技法：`node:vm` + stub `window.__ModuleLoader__`/`document`/`fetch`/最小 React（`createElement`、
   hooks、`Fragment`、`forwardRef`…），hooks 按组件函数身份分槽，`plugin.apply(假 Cordis ctx)` 后真的渲染面板。
 - 覆盖的断言组：
@@ -127,15 +135,17 @@ node dev/verify-client.mjs
 | 注册面 | `slots.register('sidebar.right.pane.tab', key+'/panel', locale:'condopt')`、`('tool.call.toolview', key:'condopt_view')`；`sidebarRightTabs.register({id,kind:'condopt',title})`；`commandUi.register({name:'condopt', ui:{kind:'action', run}})`；命令 run 触发 `openRightbar` + `openTab('condopt')` |
 | locale | `ctx.locale.register('condopt', {zh,en})`；zh/en 键集合完全一致；`locale/*.json` 合法且两文件键一致 |
 | 样式 | 注入带 `data-plugin-css="dsh-condopt…"` 的 `<style>`；teardown 时移除 |
-| 面板渲染 | 首次/数据到达后/第三次渲染均不抛；请求 `/api/studies`、`/api/view`（或 `/api/spec`）；全部请求在 `/condopt/api/` 前缀下；`css+html` 确实写进 **shadow DOM**（含 fixture 的 `FIXTURE_STYLE_ONE`/`FIXTURE_VIEW_BODY`）；全局 `document.body` 未被污染（R1）；空 runs 有 `init` 引导；网络失败态不抛 |
+| 面板渲染（v3.0） | 首次/数据到达后/渲染均不抛；请求 `/api/studies`、`/api/study`；**挂载面板后 `/api/view` 调用次数 = 0**（摘要默认，DESIGN §8.7 H/J）；摘要页渲染 study 名/算法/预算/最优/待回填/`stateToken` 前 8 位且不含 dashboard 正文；切到「视图」页后 `/api/view` = **1**（懒加载） |
+| 视图 iframe（v3.0） | 视图用 `<iframe>`：`sandbox === 'allow-same-origin'`（**精确值**，无 allow-scripts/forms/popups）、`referrerPolicy='no-referrer'`、`srcDoc` 含 CSP meta（`default-src 'none'`）+ `<style>`/css + `<body>`/html、**不含 `<script`**；全局 `document.body` 未被污染 |
+| 设置页（v3.0） | `settings.section` slot 注册（`id:'condopt'`、`order:60`、locale）、组件渲染不抛；读取 `/api/diagnostics` 并渲染 root 路径/候选表；`configForms` 缺失时给配置说明而不是抛；本页只读（无 POST） |
 | 参数页交互 | 切到「参数」子页签 → 出现动作按钮组；点击向 `POST /condopt/api/exec` 发请求；存在 `command:'ask'` 且 body 形状 `{run,command,params}`、不含直传 argv；无未捕获异常 / 无 unhandledRejection |
 | 执行开关（v1.3） | health 回 `allowExec:false` 时，ask/confirm/override/auto/step 五个写按钮**全部 disabled**、显示 `panel.execDisabled` 提示、点击不发 POST |
 | override 内层 params（v1.2） | 改 schema choice 控件（kernel→rbf）+ 填理由 → POST `override` 的 `params.params.kernel === 'rbf'`、`algorithm/reason` 齐全、无直传 argv |
 | 决策页 | 触发 `GET /condopt/api/study` |
 | 工具卡 | `condopt_view` 卡渲染不抛、不把整份 dashboard HTML 塞进来 |
 
-- 已知限制：harness 用假 React 求值组件树（不是真 DOM/真调度），能覆盖注册、数据流、事件回调与
-  shadow 写入路径；**像素级布局/样式**不在覆盖内（那需要 A7 真机目视）。
+- 已知限制：harness 用假 React 求值组件树（不是真 DOM/真调度），能覆盖注册、数据流、事件回调、
+  iframe 的 `sandbox`/`srcDoc` 契约；**像素级布局/样式与 iframe 内真实排版**不在覆盖内（那需要 A7 真机目视）。
 
 ## A2/A3 的 v2.0 新增断言（DESIGN §8.6）
 
@@ -171,6 +181,29 @@ v2.0 的断言就在同两条命令里跑（`node dev/verify-host.mjs` / `node d
   2. **`<root>/runs` 不可写**（DSH 文件沙箱）→ `expect 放行/不校验、tell 三形态、临时文件清理` SKIP。
   两种都能靠 `DSH_CONDOPT_VERIFY_ROOT` 指向一个合法（且可写的）condopt 根绕过；等价全绿为 `315/315`（真仓库布局）
   或 `314/314`（独立 clone 布局）。
+
+## A2/A3 的 v3.0 第一波新增断言（DESIGN §8.7 G/H/I/J）
+
+**Host（A2）：`GET /condopt/api/diagnostics`**
+
+| 组 | 断言要点 |
+|---|---|
+| 未命中 root | 用注入 `selfDir`+空 `workspaces`+chdir 空目录让七级全不合法：**仍 200**（诊断不因 root 缺失而 409/500）、`candidates` 七级齐全且顺序 = request/env/config/self/session/workspace/cwd、`valid` 全 `false`、`root.source==='none'` |
+| 命中 root | 形状：`ok:true`、`plugin{name='dsh-condopt', version===package.json version, node, dshEngine}`、`root{path,source}`、7 个候选 `{level,path,valid:boolean,detail}`（合法 detail=`ok`、不合法 ∈ `not-a-condopt-root|missing`）、`python{spec,ok,probe}`、`cli{path,ok}`、`condopt.version`、`env{CONDOPT_ROOT,CONDOPT_PYTHON}`、`allowExec`、`degraded[]`；`root.source`/`root.path` 与候选表一致 |
+| 探测失败 | 假 spawn 返回 `{ok:false,code:1}` → **200** 且 `python.ok===false`（不 500） |
+| 探测挂起 | 假 spawn 返回永不结算的 Promise → **不挂起**（<12s，契约 5s 超时）且 `python.ok===false` |
+| 只读 | 该端点调用前后 run 目录快照一致（零写入）；记录型 spawn 断言 argv 里**没有 `render`**；`allowExec=false` 时 `allowExec` 如实为 `false` |
+
+**Client（A3）**
+
+| 组 | 断言要点 |
+|---|---|
+| 摘要默认 | 挂载面板 `/api/view` = **0**；请求 `/api/studies`+`/api/study`；摘要渲染 study 名/算法/预算/最优/待回填/`stateToken` 前 8 位；不含 dashboard 正文 |
+| 视图懒加载 + iframe | 切到视图页 `/api/view` = **1**；`iframe.sandbox` 精确 `allow-same-origin`、`referrerPolicy='no-referrer'`、`srcDoc` 含 CSP meta(`default-src 'none'`)+`<style>`+`<body>`、不含 `<script`；无 shadow DOM 污染 |
+| 设置页 | `settings.section`（`id:'condopt'`、`order:60`）注册、渲染不抛、读 `/api/diagnostics`、`configForms` 缺失给说明、只读无 POST |
+| 源码级 | `client.js` 全文 **不含 `attachShadow`**（DESIGN §8.7 I） |
+
+- **当前结果**：Host（A2）`304/310 通过，0 失败，6 SKIP`（可写临时根 `342/342`；6 组真写入因沙箱禁写 `runs/`）；Client（A3）`127/127 通过，0 失败`。证据 sha：`index.js 78C23FC3…`、`client.js ECDAAC44…`。
 
 ## A4 真实视图管线（纯读）
 
@@ -271,3 +304,4 @@ node dev/verify-client.mjs *> verify-client.log
 ```
 
 日志里每行 `ok/FAIL/SKIP/NOTE` 都带断言名，足以逐条对账；`FAIL` 行同时给出「期望/实际」。
+

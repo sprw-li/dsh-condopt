@@ -43,6 +43,10 @@ const CLI_MODULE = ['src', 'condopt', 'cli.py']
 /** 默认子进程超时；render 慢得多（DESIGN R2：demo_moo 实测约 2s，但冷启动要留余量）。 */
 const DEFAULT_TIMEOUT_MS = 60000
 const RENDER_TIMEOUT_MS = 120000
+/** 诊断里 `python --version` 的探测超时（DESIGN §8.7 G：5s，到点 kill 并降级为 ok:false）。 */
+const PYTHON_PROBE_TIMEOUT_MS = 5000
+/** 注入式 spawn 返回 Promise 却永不结算时的哨兵值（用于超时竞速）。 */
+const PROMISE_HANDLE_TIMEOUT = Symbol('dsh-condopt:spawn-timeout')
 /** 十进制参数上限（DESIGN §5）。 */
 const MAX_DECIMAL = 100000
 /** `limit` 的专用上界（DESIGN v1.4：1000，避免一次拉全量决策日志）。 */
@@ -192,13 +196,24 @@ export async function runCli(argv, options = {}) {
   const scriptPath = join(String(root || ''), ...CLI_SCRIPT)
   const args = [...(Array.isArray(spec.prefix) ? spec.prefix : []), scriptPath, ...argv]
   const shared = { root, env: { ...env, PYTHONUTF8: '1' }, windowsHide: true, timeoutMs }
-  const first = await spawnCaptured(spawnImpl, spec.prog, args, shared, 'pipe')
-  /* 受限环境（DSH 沙箱的 confined 模式）不允许创建命名管道，Node 用默认
-     stdio:'pipe' 捕获子进程输出会得到 `spawn EPERM`。此时退化为「文件重定向」
-     捕获：`stdio: ['ignore', fd, fd]`，仍然是 spawn(argv 数组)、仍然不经 shell，
-     只是用临时文件代替管道。正常环境下不会走这条路，所以零额外开销。 */
+  return await spawnWithFallback(spawnImpl, spec.prog, args, shared)
+}
+
+/**
+ * 跑一次子进程，并在受限环境下自动退化捕获方式。
+ *
+ * 受限环境（DSH 沙箱的 confined 模式）不允许创建命名管道，Node 用默认 stdio:'pipe'
+ * 捕获子进程输出会得到 `spawn EPERM`。此时退化为「文件重定向」捕获：
+ * `stdio: ['ignore', fd, fd]`，仍然是 spawn(argv 数组)、仍然不经 shell，只是用
+ * 临时文件代替管道。正常环境下不会走这条路，所以零额外开销。
+ *
+ * `runCli`（condopt CLI）与 `probePython`（诊断探测）共用这一条路径，避免
+ * 「CLI 能跑、诊断却报 EPERM」这种自相矛盾的状态。
+ */
+async function spawnWithFallback(spawnImpl, prog, args, shared) {
+  const first = await spawnCaptured(spawnImpl, prog, args, shared, 'pipe')
   if (first.error !== undefined && /\bEPERM\b/.test(first.error)) {
-    const second = await spawnCaptured(spawnImpl, spec.prog, args, shared, 'files')
+    const second = await spawnCaptured(spawnImpl, prog, args, shared, 'files')
     if (second.error === undefined) return second
     return { ...second, error: `${second.error}（管道捕获 EPERM，改用文件重定向仍失败）` }
   }
@@ -228,10 +243,27 @@ async function spawnCaptured(spawnImpl, prog, args, shared, mode) {
     await closeCaptureFiles(files)
     return { ok: false, code: null, stdout: '', stderr: '', timedOut: false, error: `无法启动 Python：${errorText(error)}` }
   }
-  /* 假 spawn 可以直接返回结果对象（Promise），省去手柄模拟。 */
+  /* 假 spawn 可以直接返回结果对象（Promise），省去手柄模拟——但**必须一起进超时竞速**：
+     注入的 spawn 永不 resolve 时也要按 timeoutMs 结算（harness 的「探测挂起」用例正是
+     靠这条路径，否则诊断端点会一直挂着，5s 契约形同虚设）。 */
   if (handle !== null && typeof handle === 'object' && typeof handle.then === 'function') {
-    const settled = await handle
+    let timer
+    let settled
+    try {
+      settled = await Promise.race([
+        handle,
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(PROMISE_HANDLE_TIMEOUT), timeoutMs)
+        }),
+      ]).finally(() => clearTimeout(timer))
+    } catch (error) {
+      await closeCaptureFiles(files)
+      return { ok: false, code: null, stdout: '', stderr: '', timedOut: false, error: `注入的 spawn 抛错：${errorText(error)}` }
+    }
     await closeCaptureFiles(files)
+    if (settled === PROMISE_HANDLE_TIMEOUT) {
+      return { ok: false, code: null, stdout: '', stderr: '', timedOut: true, error: `超时（${Math.round(timeoutMs / 1000)}s）` }
+    }
     return normalizeOutcome(settled)
   }
   if (handle === null || typeof handle !== 'object' || typeof handle.on !== 'function') {
@@ -407,22 +439,57 @@ function tryParseJson(text) {
  * @param {string} [sessionCwd] 会话工作目录（老式位置参数写法）
  */
 export function resolveRoot(options = {}, sessionCwd) {
+  const candidates = collectRootCandidates(options, sessionCwd)
+  for (const candidate of candidates) {
+    if (candidate.valid) {
+      /* 兼容既有 source 词表：请求参数这一级历史上叫 `arg`（harness 已冻结该断言）。
+         diagnostics 的候选表里同一级叫 `request`（DESIGN §8.7 G）。 */
+      return { root: candidate.dir, source: candidate.level === 'request' ? 'arg' : candidate.level }
+    }
+  }
+  return {
+    root: null,
+    source: 'none',
+    code: 'root-not-found',
+    error: '未找到 condopt 根目录（需要同时存在 scripts/run_condopt.py 与 src/condopt/cli.py）；'
+      + '可用请求参数 root、环境变量 CONDOPT_ROOT 或插件配置 projectRoot 指定。',
+  }
+}
+
+/** 七级的规范顺序（DESIGN §8.7 G 的候选表顺序）。 */
+const ROOT_LEVELS = ['request', 'env', 'config', 'self', 'session', 'workspace', 'cwd']
+
+/**
+ * 收集**全部**根目录候选（含不合法的），按 DESIGN §2 顺序。
+ *
+ * 与 `resolveRoot` 共用同一份来源，避免「诊断页显示的候选表」和「真正用的解析顺序」
+ * 将来漂移。同一级可能出现多条（例如 session 的三种写法、workspace 的多个工作区）：
+ * 这里保留原始顺序，`rootCandidates` 负责折叠成契约要求的七行。
+ */
+function collectRootCandidates(options, sessionCwd) {
   const opts = typeof options === 'string' ? { root: options } : (isPlainObject(options) ? options : {})
   const env = isPlainObject(opts.env) ? opts.env : process.env
   const config = isPlainObject(opts.config) ? opts.config : {}
   const isRoot = typeof opts.isRoot === 'function' ? opts.isRoot : defaultIsRoot
   const candidates = []
-  const push = (value, source) => {
+  const push = (value, level) => {
     if (typeof value !== 'string' || value.trim() === '') return
-    candidates.push({ dir: resolve(value.trim()), source })
+    const dir = resolve(value.trim())
+    let valid = false
+    try {
+      valid = isRoot(dir) === true
+    } catch {
+      valid = false
+    }
+    candidates.push({ level, dir, valid })
   }
-  push(opts.root, 'arg')
+  push(opts.root, 'request')
   push(env.CONDOPT_ROOT, 'env')
   push(unwrapConfigValue(config.projectRoot, undefined), 'config')
   /* ④ 插件自身目录的上一级：自持位置，不依赖任何运行时服务。 */
   const selfDir = typeof opts.selfDir === 'string' && opts.selfDir.trim() !== '' ? opts.selfDir.trim() : PLUGIN_DIR
   push(resolve(selfDir, '..'), 'self')
-  /* ⑤ 会话工作目录：显式 cwd/位置参数优先，其次 apply 注入的 sessionCwd。 */
+  /* ⑤ 会话工作目录：显式 cwd → 位置参数 → apply 注入的 sessionCwd（依次兜底）。 */
   push(opts.cwd, 'session')
   push(sessionCwd, 'session')
   push(opts.sessionCwd, 'session')
@@ -433,16 +500,31 @@ export function resolveRoot(options = {}, sessionCwd) {
   }
   /* ⑦ 进程 cwd。 */
   push(process.cwd(), 'cwd')
-  for (const candidate of candidates) {
-    if (isRoot(candidate.dir)) return { root: candidate.dir, source: candidate.source }
-  }
-  return {
-    root: null,
-    source: 'none',
-    code: 'root-not-found',
-    error: '未找到 condopt 根目录（需要同时存在 scripts/run_condopt.py 与 src/condopt/cli.py）；'
-      + '可用请求参数 root、环境变量 CONDOPT_ROOT 或插件配置 projectRoot 指定。',
-  }
+  return candidates
+}
+
+/**
+ * 诊断用的候选表（DESIGN §8.7 G）：**恰好七行**，每级一行，含不合法项。
+ *
+ * 每行 `{level, path, valid, detail}`，detail ∈ `ok | not-a-condopt-root | missing`：
+ * - `path` 为该级解析后的绝对路径（缺失时 null）；
+ * - 同一级有多条候选时，优先取「第一条合法的」，否则取第一条存在的；都不存在才是 missing。
+ *
+ * 纯函数 + 可注入（`opts.isRoot`/`opts.env`/…），harness 可以直接喂假路径断言。
+ */
+export function rootCandidates(options = {}, sessionCwd) {
+  const collected = collectRootCandidates(options, sessionCwd)
+  return ROOT_LEVELS.map((level) => {
+    const rows = collected.filter((row) => row.level === level)
+    if (rows.length === 0) return { level, path: null, valid: false, detail: 'missing' }
+    const hit = rows.find((row) => row.valid) || rows[0]
+    return {
+      level,
+      path: hit.dir,
+      valid: hit.valid,
+      detail: hit.valid ? 'ok' : 'not-a-condopt-root',
+    }
+  })
 }
 
 /** 调一个可能抛错/不存在的取值函数，失败给回退值。 */
@@ -1540,6 +1622,145 @@ async function readVersion(root, readFileImpl) {
   return match === null ? '' : match[1]
 }
 
+/** 读本插件自己的 package.json（DESIGN §8.7 G：路径必须基于 import.meta.url，不依赖 cwd）。 */
+async function readPluginManifest(readFileImpl) {
+  const text = await readTextSafe(join(PLUGIN_DIR, 'package.json'), readFileImpl)
+  if (text === null) return null
+  const parsed = parseJsonLoose(text)
+  return isPlainObject(parsed) ? parsed : null
+}
+
+/**
+ * 一次**有超时**的 `python --version` 探测（DESIGN §8.7 G）。
+ *
+ * 纯只读：只问解释器版本，不碰 condopt 仓库、不写任何文件。失败与超时都返回
+ * `{ok:false, error}`——调用方（诊断端点）据此记 `degraded`，**绝不 500**。
+ * 复用 `spawnCaptured`，因此在受限沙箱里也能靠文件重定向兜底拿到结果。
+ */
+async function probePython(spec, options = {}) {
+  const spawnImpl = typeof options.spawnImpl === 'function' ? options.spawnImpl : spawn
+  const env = isPlainObject(options.env) ? options.env : process.env
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : PYTHON_PROBE_TIMEOUT_MS
+  const args = [...(Array.isArray(spec.prefix) ? spec.prefix : []), '--version']
+  const outcome = await spawnWithFallback(spawnImpl, spec.prog, args, {
+    root: undefined,
+    env: { ...env, PYTHONUTF8: '1' },
+    windowsHide: true,
+    timeoutMs,
+  })
+  if (outcome.timedOut) {
+    return { ok: false, error: `探测超时（${Math.round(timeoutMs / 1000)}s）：${outcome.error || spec.prog}` }
+  }
+  if (outcome.error !== undefined) return { ok: false, error: outcome.error }
+  if (!outcome.ok) {
+    return {
+      ok: false,
+      error: firstLine(outcome.stderr) || firstLine(outcome.stdout)
+        || `${spec.prog} --version 退出码 ${outcome.code === null ? '?' : outcome.code}`,
+    }
+  }
+  /* `py -3 --version` 走 stdout；个别发行版把版本打到 stderr，两边都认。 */
+  const output = firstLine(outcome.stdout) || firstLine(outcome.stderr)
+  if (output === '') return { ok: false, error: `${spec.prog} --version 没有输出` }
+  return { ok: true, output }
+}
+
+/**
+ * 诊断载荷（DESIGN §8.7 G）——`GET /condopt/api/diagnostics` 的全部内容。
+ *
+ * 设计要点：
+ * - **永远 200**：root 没解析出来就把七级候选表原样列出来，这才是"诊断"的意义；
+ * - **只读**：不渲染、不写 run 目录、不调任何写类子命令，唯一的子进程是
+ *   `python --version`（5s 超时，失败/超时都降级为 `ok:false`）；
+ * - 全部依赖可注入（`spawnImpl/fsImpl/env/config/python/now/…`），harness 用假 spawn
+ *   就能覆盖「探测失败」「探测超时」两条路径，不必真装 Python。
+ */
+export async function diagnosticsPayload(deps = {}) {
+  const env = isPlainObject(deps.env) ? deps.env : process.env
+  const config = isPlainObject(deps.config) ? deps.config : {}
+  const injectedFs = isPlainObject(deps.fsImpl) ? deps.fsImpl : {}
+  const readFileImpl = typeof injectedFs.readFile === 'function' ? injectedFs.readFile : readFile
+  const existsImpl = typeof deps.existsImpl === 'function' ? deps.existsImpl : existsSync
+  const spawnImpl = typeof deps.spawnImpl === 'function' ? deps.spawnImpl : spawn
+  const python = deps.python !== undefined && deps.python !== null ? deps.python : pythonSpec(env, config)
+  const degraded = []
+  const pushDegraded = (id, reason) => {
+    if (typeof reason !== 'string' || reason === '') return
+    degraded.push({ id, reason })
+  }
+  /* apply 阶段已经知道的服务缺失（例如 ctx.tools 不可用）由调用方带进来。 */
+  if (Array.isArray(deps.degraded)) {
+    for (const row of deps.degraded) {
+      if (isPlainObject(row) && typeof row.id === 'string') pushDegraded(row.id, String(row.reason || ''))
+    }
+  }
+
+  const candidates = rootCandidates({
+    root: deps.root,
+    env,
+    config,
+    cwd: deps.cwd,
+    sessionCwd: deps.sessionCwd,
+    selfDir: deps.selfDir,
+    workspaces: deps.workspaces,
+    isRoot: deps.isRoot,
+  })
+  const winner = candidates.find((row) => row.valid) || null
+  const rootPath = winner === null ? null : winner.path
+  if (winner === null) pushDegraded('root-not-found', '七级候选都不是合法 condopt 根（需要 scripts/run_condopt.py 与 src/condopt/cli.py）')
+
+  const manifest = await readPluginManifest(readFileImpl)
+  if (manifest === null) pushDegraded('plugin-manifest', `读不到或无法解析 ${join(PLUGIN_DIR, 'package.json')}`)
+
+  const cliPath = rootPath === null ? null : join(rootPath, ...CLI_SCRIPT)
+  let cliOk = false
+  try {
+    cliOk = cliPath !== null && existsImpl(cliPath) === true
+  } catch {
+    cliOk = false
+  }
+  if (rootPath !== null && !cliOk) pushDegraded('cli-missing', `找不到 CLI 入口：${cliPath}`)
+
+  const probe = await probePython(python, {
+    spawnImpl,
+    env,
+    timeoutMs: Number.isFinite(deps.pythonProbeTimeoutMs) ? deps.pythonProbeTimeoutMs : PYTHON_PROBE_TIMEOUT_MS,
+  })
+  if (!probe.ok) pushDegraded('python-probe', probe.error)
+
+  const version = rootPath === null ? '' : await readVersion(rootPath, readFileImpl)
+
+  return {
+    ok: true,
+    plugin: {
+      name: isPlainObject(manifest) && typeof manifest.name === 'string' && manifest.name !== '' ? manifest.name : 'dsh-condopt',
+      version: isPlainObject(manifest) && typeof manifest.version === 'string' ? manifest.version : '',
+      node: process.version,
+      dshEngine: isPlainObject(manifest) && isPlainObject(manifest.engines) && typeof manifest.engines.dsh === 'string'
+        ? manifest.engines.dsh
+        : '',
+    },
+    root: {
+      path: rootPath,
+      source: winner === null ? 'none' : winner.level,
+    },
+    candidates,
+    python: {
+      spec: typeof python.display === 'string' ? python.display : '',
+      ok: probe.ok,
+      probe,
+    },
+    cli: { path: cliPath, ok: cliOk },
+    condopt: { version },
+    env: {
+      CONDOPT_ROOT: typeof env.CONDOPT_ROOT === 'string' ? env.CONDOPT_ROOT : '',
+      CONDOPT_PYTHON: typeof env.CONDOPT_PYTHON === 'string' ? env.CONDOPT_PYTHON : '',
+    },
+    allowExec: config.allowExec !== false,
+    degraded,
+  }
+}
+
 /**
  * 汇总 tell 的输入来源（DESIGN §8.6B）。
  *
@@ -1618,6 +1839,8 @@ export function createHandler(deps = {}) {
   const selfDir = typeof deps.selfDir === 'string' && deps.selfDir !== '' ? deps.selfDir : PLUGIN_DIR
   const workspaces = deps.workspaces
   const sessionCwdOf = typeof deps.sessionCwdOf === 'function' ? deps.sessionCwdOf : null
+  /** apply 阶段已知的能力缺失（例如 ctx.tools 不可用），诊断页原样列出。 */
+  const seededDegraded = Array.isArray(deps.degraded) ? deps.degraded : []
 
   /** 每次请求按 DESIGN §2 顺序解析根目录；带了 sessionId 就能用上会话工作目录。 */
   const resolveRootHere = (hint, sessionId) => resolveRoot({
@@ -1841,6 +2064,29 @@ export function createHandler(deps = {}) {
       }
 
       /* 只读路由：GET/HEAD 同一个代码路径（HEAD 不写 body 也无妨，路由语义一致）。 */
+      if (route === '/diagnostics') {
+        /* DESIGN §8.7 G：诊断端点永远 200——root 没解析出来也要把候选表列出来，
+           否则「为什么装好却打不开」就无从自查。它是只读的：不渲染、不写 run 目录，
+           唯一的子进程是带 5s 超时的 `python --version`。 */
+        const sessionId = url.searchParams.get('sessionId')
+        const payload = await diagnosticsPayload({
+          root: url.searchParams.get('root'),
+          config,
+          env,
+          cwd,
+          selfDir,
+          workspaces,
+          sessionCwd: sessionCwdOf !== null && typeof sessionId === 'string' && sessionId !== ''
+            ? safeCall(() => sessionCwdOf(sessionId), undefined)
+            : undefined,
+          python: deps.python,
+          spawnImpl,
+          fsImpl: injectedFs,
+          degraded: seededDegraded,
+        })
+        sendJson(res, 200, payload)
+        return
+      }
       if (route === '/health') {
         const resolved = resolveRootHere(url.searchParams.get('root'), url.searchParams.get('sessionId'))
         if (resolved.root === null) {
@@ -2246,8 +2492,13 @@ function sessionCwdResolver(ctx) {
  */
 export function apply(ctx, config = {}) {
   const cfg = isPlainObject(config) ? config : {}
+  /* 诊断页要能回答「装好了但没工具/没面板」：这里记录激活期就已知的能力缺失。 */
+  const degraded = []
+  if (!servicePresent(ctx, 'webServer')) degraded.push({ id: 'webServer-service', reason: 'ctx.webServer.register 不可用（HTTP 路由未注册）' })
+  if (!servicePresent(ctx, 'tools')) degraded.push({ id: 'tools-service', reason: 'ctx.tools.register 不可用（condopt_view 工具未注册）' })
   const handlerDeps = {
     config: cfg,
+    degraded,
     /* 惰性：每次请求才去问服务，激活期不触碰。 */
     workspaces: () => workspaceListOf(ctx),
     sessionCwdOf: (sessionId) => {
@@ -2259,4 +2510,20 @@ export function apply(ctx, config = {}) {
     ctx.webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler: createHandler(handlerDeps) }))
   registerEntry(ctx, 'tools', 'condopt: condopt_view 工具', () =>
     ctx.tools.register(condoptViewTool(cfg, { workspaces: () => workspaceListOf(ctx) })))
+}
+
+/**
+ * 某个 inject 服务此刻是否可用。
+ *
+ * 只对 **inject 列表里**的服务调用（`webServer`/`tools`）——属性式访问未 inject 的服务
+ * 会被 cordis 直接拒绝；这里再包一层 try，服务尚未就绪时也不让激活失败。
+ */
+function servicePresent(ctx, name) {
+  if (ctx === null || typeof ctx !== 'object') return false
+  try {
+    const value = ctx[name]
+    return value !== null && typeof value === 'object' && typeof value.register === 'function'
+  } catch {
+    return false
+  }
 }

@@ -185,6 +185,7 @@ const FIX = {
   tell: JSON.parse(readFileSync(join(fixturesDir, 'tell.json'), 'utf8')),
   conflict: JSON.parse(readFileSync(join(fixturesDir, 'conflict.json'), 'utf8')),
   tellRows: readFileSync(join(fixturesDir, 'tell-rows.jsonl'), 'utf8'),
+  diagnostics: JSON.parse(readFileSync(join(fixturesDir, 'diagnostics.json'), 'utf8')),
   health: JSON.parse(readFileSync(join(fixturesDir, 'health.json'), 'utf8')),
 }
 let runsMode = 'normal'
@@ -229,6 +230,7 @@ async function fakeFetch(input, init) {
     return responseOf(FIX.exec)
   }
   if (path.startsWith('/condopt/api/studies')) return responseOf(runsMode === 'empty' ? { root: '', runs: [] } : FIX.studies)
+  if (path.startsWith('/condopt/api/diagnostics')) return responseOf(FIX.diagnostics)
   if (path.startsWith('/condopt/api/spec')) return responseOf(FIX.spec)
   if (path.startsWith('/condopt/api/view')) return responseOf(FIX.view)
   if (path.startsWith('/condopt/api/study')) return responseOf(tokenOverride === null ? FIX.study : { ...FIX.study, stateToken: tokenOverride, current: FIX.study.current })
@@ -627,6 +629,7 @@ function renderPanel(props = {}) {
 
 {
   resetAllHooks()
+  fetchCalls.length = 0
   const first = renderPanel()
   check('面板首次渲染不抛', first.error === null, '不抛', first.error ? String(first.error && first.error.stack) : 'ok')
   check('面板首次渲染有内容', typeof first.html === 'string' && first.html.length > 0, 'html 非空', `len=${first.html.length}`)
@@ -636,25 +639,56 @@ function renderPanel(props = {}) {
   await settle()
   const second = renderPanel()
   check('数据到达后面板再次渲染不抛', second.error === null, '不抛', second.error ? String(second.error && second.error.stack) : 'ok')
-  try { flushEffects() } catch { /* 第二次 effect：run 已选中 → 拉 view/spec/study */ }
+  try { flushEffects() } catch { /* 摘要页只拉 study */ }
   await settle(4)
   const third = renderPanel()
-  check('view 数据到达后第三次渲染不抛', third.error === null, '不抛', third.error ? String(third.error && third.error.stack) : 'ok')
-  try { flushEffects() } catch { /* 第三次 effect：画 shadow */ }
+  check('摘要数据到达后第三次渲染不抛', third.error === null, '不抛', third.error ? String(third.error && third.error.stack) : 'ok')
+  try { flushEffects() } catch { /* 忽略 */ }
   await settle(4)
 
   const apiCalls = fetchCalls.filter((c) => c.url.includes('/condopt/api/'))
   const requested = apiCalls.map((c) => c.url.replace(/^https?:\/\/[^/]+/, '').split('?')[0])
   check('面板请求 /condopt/api/studies', requested.some((p) => p === '/condopt/api/studies'), '/condopt/api/studies', JSON.stringify(requested))
-  check('面板请求 /condopt/api/view（或 spec）', requested.some((p) => p === '/condopt/api/view' || p === '/condopt/api/spec'), 'view/spec', JSON.stringify(requested))
+  check('摘要页请求 /condopt/api/study', requested.some((p) => p === '/condopt/api/study'), '/condopt/api/study', JSON.stringify(requested))
+  const viewOnMount = apiCalls.filter((c) => c.url.includes('/condopt/api/view')).length
+  check('挂载面板后 /api/view 调用次数 = 0（摘要默认，DESIGN §8.7 H/J）', viewOnMount === 0, '0 次', `${viewOnMount} 次：${JSON.stringify(apiCalls.filter((c) => c.url.includes('/api/view')).map((c) => c.url))}`)
   check('所有请求都在 /condopt/api/ 前缀下', apiCalls.every((c) => c.url.includes('/condopt/api/')) && apiCalls.length > 0, '全部命中前缀', JSON.stringify(apiCalls.map((c) => c.url).slice(0, 10)))
 
-  const shadow = shadowContent()
-  const rendered = third.html + '\n' + second.html + '\n' + shadow + '\n' + first.html
-  check('视图 css/html 进入 shadow DOM', shadow.includes('FIXTURE_VIEW_BODY') || rendered.includes('FIXTURE_VIEW_BODY'), 'shadow 内出现 FIXTURE_VIEW_BODY', `shadowRoots=${shadowRoots.length} shadowWrites=${shadowWrites.length} shadowLen=${shadow.length}`)
-  check('shadow 内同时注入 css 与 html', shadow.includes('FIXTURE_STYLE_ONE') && shadow.includes('FIXTURE_VIEW_BODY'), 'css + html 都在 shadow', `shadowLen=${shadow.length}`)
-  check('shadow DOM 未污染全局 document（R1）', !fakeDocument.body.innerHTML.includes('FIXTURE_VIEW_BODY'), 'body 不含 dash 内容', String(fakeDocument.body.innerHTML).slice(0, 80))
-  check('面板显示 study/run 信息', rendered.includes('demo_moo') || /demo_moo/.test(shadow), '出现 demo_moo', rendered.slice(0, 200))
+  /* 摘要页渲染 report/current 关键字段 */
+  const summaryHtml = third.html + '\n' + second.html + '\n' + first.html
+  const token8Summary = String(FIX.study.stateToken).slice(0, 8)
+  check('摘要页显示 study 名（demo_moo）', summaryHtml.includes('demo_moo'), 'demo_moo', summaryHtml.slice(0, 200))
+  check('摘要页显示算法（current.algorithm）', summaryHtml.includes(String(FIX.study.current.algorithm)), FIX.study.current.algorithm, summaryHtml.slice(0, 200))
+  check('摘要页显示预算/观测数（24）', /24/.test(summaryHtml), '24', summaryHtml.slice(0, 200))
+  check('摘要页显示最优值（89.95…）', /89\.95/.test(summaryHtml), '89.95…', summaryHtml.slice(0, 200))
+  check('摘要页显示待回填数（0）', /待回填|pending|0/.test(summaryHtml), '待回填 0', summaryHtml.slice(0, 200))
+  check('摘要页显示 stateToken 前 8 位', summaryHtml.includes(token8Summary), token8Summary, summaryHtml.slice(0, 200))
+  check('摘要页不把整份 dashboard HTML 塞进来', !summaryHtml.includes('FIXTURE_VIEW_BODY'), '无 dashboard 正文', summaryHtml.slice(0, 160))
+
+  /* 切到视图页 → /api/view 恰好 1 次，且用 sandboxed iframe */
+  {
+    const tree = buildTree(React.createElement(panelReg.component, { t: (key, params) => translate('condopt', key, params) }))
+    const viewTab = tree.find((n) => n.type === 'button' && typeof n.props.onClick === 'function' && textOf(n.children).includes(translate('condopt', 'subtab.view')))
+    check('摘要页有「视图」子页签', viewTab !== undefined, `button「${translate('condopt', 'subtab.view')}」`, JSON.stringify(tree.filter((n) => n.type === 'button').map((b) => textOf(b.children)).slice(0, 8)))
+    if (viewTab) { try { await viewTab.props.onClick({ preventDefault() {}, stopPropagation() {}, target: {} }) } catch { /* 忽略 */ } ; await settle(4) }
+    for (let i = 0; i < 3; i += 1) { renderPanel(); try { flushEffects() } catch { /* 忽略 */ } await settle(6) }
+    const viewCalls = fetchCalls.filter((c) => c.url.includes('/condopt/api/view')).length
+    check('切到视图页后 /api/view 调用次数 = 1（懒加载）', viewCalls === 1, '1 次', `${viewCalls} 次`)
+
+    const tree2 = buildTree(React.createElement(panelReg.component, { t: (key, params) => translate('condopt', key, params) }))
+    const iframe = tree2.find((n) => n.type === 'iframe')
+    check('视图用 <iframe> 渲染（不再 shadow DOM）', iframe !== undefined, 'iframe', JSON.stringify(tree2.filter((n) => n.type === 'iframe').length))
+    if (iframe) {
+      check("sandbox 精确为 'allow-same-origin'（无 allow-scripts/forms/popups）", iframe.props.sandbox === 'allow-same-origin', "'allow-same-origin'", JSON.stringify(iframe.props.sandbox))
+      check("referrerPolicy='no-referrer'", iframe.props.referrerPolicy === 'no-referrer', "'no-referrer'", JSON.stringify(iframe.props.referrerPolicy))
+      const doc = String(iframe.props.srcDoc === undefined ? '' : iframe.props.srcDoc)
+      check('srcDoc 含 CSP meta（default-src \'none\'）', /http-equiv=["']Content-Security-Policy["']/.test(doc) && /default-src 'none'/.test(doc), 'CSP meta + default-src none', doc.slice(0, 200))
+      check('srcDoc 含 <style> 与 css 内容', /<style[\s>]/.test(doc) && doc.includes('FIXTURE_STYLE_ONE'), '<style> + css', doc.slice(0, 200))
+      check('srcDoc 含 <body> 与 dashboard html', /<body[\s>]/.test(doc) && doc.includes('FIXTURE_VIEW_BODY'), '<body> + html', doc.slice(0, 200))
+      check('srcDoc 不含 <script（禁脚本）', !/<script/i.test(doc), '无 <script', doc.slice(0, 200))
+    }
+    check('iframe 未污染全局 document（样式不外溢）', !fakeDocument.body.innerHTML.includes('FIXTURE_VIEW_BODY'), 'body 不含 dashboard 内容', String(fakeDocument.body.innerHTML).slice(0, 80))
+  }
 
   /* 空态 */
   resetAllHooks()
@@ -665,7 +699,7 @@ function renderPanel(props = {}) {
   await settle(4)
   const empty2 = renderPanel()
   check('空态渲染有内容', empty2.error === null && empty2.html.length > 0, 'html 非空', `len=${empty2.html.length}`)
-  check('空态给出 init 引导（可复制命令）', /init/.test(empty2.html + shadowContent()), '出现 init 提示', (empty2.html + shadowContent()).slice(0, 160))
+  check('空态给出 init 引导（可复制命令）', /init/.test(empty2.html), '出现 init 提示', empty2.html.slice(0, 160))
   runsMode = 'normal'
 
   /* 网络失败态 */
@@ -1197,13 +1231,58 @@ if (toolReg && typeof toolReg.component === 'function') {
     await settle(5)
     check('工具卡按钮触发 layout.openRightbar', layoutCalls.length > layoutBefore, 'openRightbar 被调用', JSON.stringify(layoutCalls))
     check("工具卡按钮触发 openTab('condopt')", openedTabs.slice(tabsBefore).includes('condopt'), "'condopt'", JSON.stringify(openedTabs.slice(tabsBefore)))
-    /* 带 run：挂载面板后应按该 run 取视图，而不是 studies 的第一条 demo_moo */
+    /* 带 run：挂载面板后（摘要默认）应按该 run 取 study，而不是 studies 的第一条 demo_moo */
     resetAllHooks()
     fetchCalls.length = 0
     for (let i = 0; i < 3; i += 1) { renderPanel(); try { flushEffects() } catch { /* 忽略 */ } await settle(6) }
-    const viewCalls = fetchCalls.filter((c) => c.url.includes('/condopt/api/view')).map((c) => c.url)
-    check('工具卡交接的 run 被面板采用（demo，非 demo_moo）', viewCalls.some((u) => u.includes(targetRun) && !u.includes('demo_moo')), `view?run=*${targetRun}*`, JSON.stringify(viewCalls.slice(0, 5)))
+    const studyCalls = fetchCalls.filter((c) => c.url.includes('/condopt/api/study')).map((c) => c.url)
+    check('工具卡交接的 run 被面板采用（demo，非 demo_moo）', studyCalls.some((u) => u.includes(targetRun) && !u.includes('demo_moo')), `study?run=*${targetRun}*`, JSON.stringify(studyCalls.slice(0, 5)))
   }
+}
+
+/* ------------------------------------------------------------------ v3.0 设置页 / 诊断（DESIGN §8.7 G/J） */
+
+group('v3.0 设置页 settings.section（DESIGN §8.7 G/J）')
+
+{
+  const t = (key, params) => translate('condopt', key, params)
+  const settingsReg = slotsRegistrations.find((entry) => entry.options && entry.options.name === 'settings.section')
+  check('注册 settings.section slot', settingsReg !== undefined, "name='settings.section'", JSON.stringify(slotsRegistrations.map((r) => r.options && r.options.name)))
+  if (settingsReg !== undefined) {
+    check("settings.section id === 'condopt'", settingsReg.options.id === 'condopt', "'condopt'", JSON.stringify(settingsReg.options.id))
+    check('settings.section locale === condopt', settingsReg.options.locale === 'condopt', "'condopt'", JSON.stringify(settingsReg.options.locale))
+    check('order === 60', settingsReg.options.order === 60, '60', JSON.stringify(settingsReg.options.order))
+    check('label 是字符串或函数', typeof settingsReg.options.label === 'string' || typeof settingsReg.options.label === 'function', 'string|function', typeof settingsReg.options.label)
+    check('settings 组件是函数', typeof settingsReg.component === 'function', 'function', typeof settingsReg.component)
+
+    if (typeof settingsReg.component === 'function') {
+      /* 本 ctx 没有 configForms 服务：契约要求给说明而不是抛。 */
+      resetAllHooks()
+      fetchCalls.length = 0
+      let html = ''
+      let error = null
+      try { html = render(React.createElement(settingsReg.component, { t })) } catch (err) { error = err }
+      check('设置页首次渲染不抛（configForms 缺失）', error === null, '不抛', error ? String(error && error.stack) : 'ok')
+      try { flushEffects() } catch { /* 拉 diagnostics */ }
+      await settle(6)
+      for (let i = 0; i < 3; i += 1) { renderPanel(); try { flushEffects() } catch { /* 忽略 */ } await settle(5) }
+      let late = null
+      try { late = render(React.createElement(settingsReg.component, { t })) } catch (err) { late = null; error = err }
+      const page = String(late === null ? html : late)
+      check('设置页读取 /api/diagnostics', fetchCalls.some((c) => c.url.includes('/condopt/api/diagnostics')), '/condopt/api/diagnostics', JSON.stringify(fetchCalls.filter((c) => c.url.includes('diagnostics')).map((c) => c.url)))
+      check('设置页显示 root 路径（诊断原样渲染）', page.includes('condopt-fixture'), 'condopt-fixture', page.slice(0, 200))
+      check('设置页列候选表（七级/级别）', /候选|candidate|request|config/i.test(page), '候选表', page.slice(0, 200))
+      check('configForms 缺失时给说明（不是抛）', /configForms|CONDOPT_ROOT|配置方式/i.test(page), '配置说明', page.slice(0, 200))
+      check('设置页只读（不写 profile：无保存 POST）', !fetchCalls.some((c) => c.method === 'POST'), '0 个 POST', JSON.stringify(fetchCalls.filter((c) => c.method === 'POST').map((c) => c.url)))
+    }
+  }
+}
+
+group('v3.0 client.js 不再使用 attachShadow（DESIGN §8.7 I/J）')
+
+{
+  const occurrences = (source.match(/attachShadow/g) || []).length
+  check('client.js 源码不含 attachShadow', occurrences === 0, '0 处', `${occurrences} 处`)
 }
 
 /* ------------------------------------------------------------------ 卸载 / 清理 */

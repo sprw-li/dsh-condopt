@@ -295,6 +295,127 @@ ctx.tools.register({
 - agent 侧仍只有只读 `condopt_view`，**v2.0 不新增写工具**。
 - 不重写 dashboard、不改 shadow DOM 方案、不做跨 run 对比、不做后台循环推进（§10 待办）。
 
+## 8.7 v3.0 第一波契约（2026-11-20：诊断页 / 摘要页默认 / sandboxed iframe）
+
+用户对理事会待办说了「全做」，按优先级分两波。**本波 = 评审 #5 诊断页 + #3 视图降级 + sandboxed iframe**；
+第二波（#2 草稿型 agent 工具 + #4 跨 run 对比）见 §8.8（本波冻结后再写）。
+本波**不改** 17 条命令白名单、不动任何写路径、`condopt_view` 形状不变。
+
+### G. 诊断接口 + 设置页（评审 #5）
+
+`GET /condopt/api/diagnostics`（只读，**不探测写权限、不 spawn 渲染**）：
+
+```json
+{"ok": true,
+ "plugin": {"name": "dsh-condopt", "version": "…", "node": "v22…", "dshEngine": ">=0.2.2-rc.1 <0.3.0"},
+ "root": {"path": "…", "source": "request|env|config|self|session|workspace|cwd|none"},
+ "candidates": [{"level": "request|env|config|self|session|workspace|cwd",
+                 "path": "…", "valid": true, "detail": "ok|not-a-condopt-root|missing"}],
+ "python": {"spec": "py -3", "ok": true, "probe": {"ok": true, "output": "Python 3.14.8"}},
+ "cli": {"path": "…/scripts/run_condopt.py", "ok": true},
+ "condopt": {"version": "0.1.0"},
+ "env": {"CONDOPT_ROOT": "…", "CONDOPT_PYTHON": "…"},
+ "allowExec": true,
+ "degraded": [{"id": "python-probe|tools-service|webServer-service|…", "reason": "…"}]}
+```
+
+- `candidates` 必须逐级列出**七级**候选与 `valid`（不合法也列），供用户一眼看出"root 为什么没解析对"。
+- `probe` 是一次**有超时（5s）**的 `python --version`；失败不 500，`ok:false` + `error`。
+- `degraded` 只列宿主侧已知的能力缺失。
+
+客户端：`ctx.slots.inject('settings.section', …)` 注册 `{name:'settings.section', id:'condopt', order:60, label, locale}`；
+内容分三块：
+1. **宿主诊断**（`/api/diagnostics` 原样渲染 root 来源/候选表/python/CLI/版本/allowExec/degraded）；
+2. **客户端注册结果**（本页在 `apply` 期间每个 slot/命令/工具的注册成功或跳过 + 原因——这是"装好了但没面板"的自查面）；
+3. **配置方式**（`CONDOPT_ROOT` / `CONDOPT_PYTHON` / config `projectRoot|python|allowExec`）；
+   若 `configForms.get('condopt')` 可用（feature detect）则内嵌 DSH 设置表单，否则只给说明。**本页只读，不写 profile。**
+
+### H. 摘要页默认（评审 #3 前半）
+
+- 面板子页签改为：**摘要（默认）｜视图｜参数｜决策**（第二波再加「对比」）。
+- **摘要页只允许调 `GET /api/study`**（**不得调 `/api/view`**，否则首屏又要等 ~2s 渲染）：显示
+  study 名 / 算法 / 目标与方向 / 预算·已用·剩余 / 最优 / 观测数 / 待回填数 / `stateToken` 前 8 位 /
+  `step.action` + `next_command`（无 step 时提示"点『下一步』获取"，不自动调）/ 最近 3 条决策 / warnings；
+  末尾一个「打开完整视图」按钮切到视图页。
+- **视图页懒加载**：只有用户切到视图页（或点上面那个按钮）才请求 `/api/view`；`?force=1` 只由「强制重新生成」触发。
+
+### I. sandboxed iframe 取代 shadow DOM（评审 #3 后半）
+
+- 视图页改用 `<iframe sandbox="allow-same-origin" referrerPolicy="no-referrer" srcDoc={doc}>`，
+  **不再使用 `attachShadow`**。
+- `doc` 固定为：
+  `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:"><style>${css}</style></head><body>${html}</body></html>`
+  ——`default-src 'none'` 从文档内部再兜一层"不发外网请求"。
+- `sandbox` 精确为 `allow-same-origin`（无 `allow-scripts`/`allow-forms`/`allow-popups`/`allow-top-navigation`）：
+  禁止脚本执行与表单/导航，同时保留父页读 `contentDocument` 做高度自适应的能力。
+- 高度：`onLoad` 后能读到 `contentDocument.body.scrollHeight` 就自适应，上限 `70vh`（超出则 iframe 内滚动）；读不到用固定 `70vh`。
+- 失败态不变：错误文案 + 重试。
+
+### J. 本波验收（新增断言）
+
+| 组 | 断言 |
+|---|---|
+| A2 | `/api/diagnostics` 形状（含 `candidates` 七级、`valid` 布尔、`degraded` 数组）；root 命中时 `root.source` 与候选表一致；`python.probe` 失败/超时不 500；`allowExec` 如实；该端点**零 spawn 渲染**、不写 run 目录 |
+| A3 | `settings.section` 被注册（id `condopt`）且渲染不抛；`configForms` 缺失时给说明而不是抛；**挂载面板后 `/api/view` 调用次数 = 0**（摘要默认），切到视图页后 = 1；摘要渲染出 report 关键字段；视图用 iframe：`sandbox` 精确 `allow-same-origin`、`srcDoc` 含 CSP meta 与 `<style>`/body、**不含 `<script`**、组件代码不再出现 `attachShadow` |
+
+## 8.8 v3.0 第二波契约（2026-11-20：草稿型 agent 工具 / 跨 run 对比）
+
+第一波（§8.7）冻结并通过后才开工。本波**不改** 17 条命令白名单、不改任何写路径、`condopt_view` 形状不变。
+
+### K. 草稿型 agent 工具 `condopt_draft`（评审 #2：agent 只出草稿、不落盘）
+
+新增**只读**工具（`isConcurrencySafe: () => true`），**绝不写 run 目录、绝不调 exec**：
+
+```
+condopt_draft({
+  root?, run?,
+  kind: 'ask' | 'tell' | 'override',
+  n?, plate?,                    // kind=ask
+  resultsText?, observations?,   // kind=tell（observations=[{id,y,…}] 由宿主序列化成 resultsText）
+  algorithm?, params?, reason?   // kind=override
+})
+→ { kind, run, root,
+    payload: { command, params, expect? },      // 与面板将发给 /api/exec 的同一形状
+    preview: { rows?, format?, algorithm?, changedFields?, pendingCount? },
+    warnings: string[], text: string }
+```
+
+- `payload.expect` 用**当前** `stateToken`；工具不执行，只给面板/用户复用。
+- `warnings` 至少覆盖：结果 id 不在 pending、行数 > 5000、`algorithm` 不在 spec、`override` 无 `reason`、
+  run 不存在、无法解析 `resultsText`。
+- `text` = 紧凑 Markdown：要做什么 / 目标 run / 将改什么 / 「需要你在面板里确认后才会执行」。
+- 客户端：`tool.call.toolview` 注册 key **`condopt_draft`** 的卡片，带按钮「**在面板中打开并预填**」：
+  复用 v2.0 的模块内交接通道把 `{root, run, kind, payload, preview}` 交给面板，面板把草稿**预填**到对应区块
+  （tell → textarea；ask → `n`/`plate`；override → 算法/参数/reason），**仍然要用户点确认**才会发 `POST /api/exec`。
+- 硬约束：agent 侧**只有** `condopt_view`（只读）与 `condopt_draft`（只读草稿）；v3.0 不新增任何 agent 写工具。
+
+### L. 跨 run 对比（评审 #4，最小版）
+
+宿主 `GET /condopt/api/compare?runs=a,b,c`（2–8 个，全部走 `resolveRunDir` 围栏）→
+
+```json
+{"ok": true,
+ "runs": [{"id":"…","rel":"runs/…","algorithm":"…","objective":"…","direction":"max",
+           "budget":24,"nObservations":24,"pendingCount":0,"best":96.4,
+           "stateToken":"…","series":[{"t":1,"best":90.0}]}],
+ "warnings": ["…"]}
+```
+
+- `series` = **best-so-far**（按 `direction` 取 max/min），从 `dataset.jsonl`（必要时 `rounds.json`）**直接读文件**得出：
+  **不 spawn CLI、不渲染 HTML**；点数 ≤ 400，超出等距降采样并在 `warnings` 注明。
+- 缺文件/解析失败/不在 root 内的 run：记 `warnings` 并**从 `runs` 中省略**，整体仍 200；`runs` 参数数量越界（<2 或 >8）→ 400 `bad-param`。
+- 客户端：面板新增子页签 **对比**：多选 run（来自 `/api/studies`，最多 8）+ 表格
+  （算法/目标/预算/观测数/待回填/最优/令牌前 8）+ 客户端 SVG 叠加折线（best-so-far）+ 「复制对比 Markdown」。
+  **不做**自由图表配置、不做交互缩放、不做多目标前沿对比（那是 workbench 的职责）。
+- 摘要/视图/参数/决策四页行为不变。
+
+### M. 第二波验收（新增断言）
+
+| 组 | 断言 |
+|---|---|
+| A2 | `/api/compare` 形状；`series` 与 direction 一致（对已知 run 逐点核对 best-so-far）；>400 点降采样且 `warnings` 注明；缺文件 run → 省略 + warning 且仍 200；`runs` 数量越界 → 400；该端点**零 spawn、零写入 run 目录**；`condopt_draft` 三种 kind 的 `payload/preview/warnings` 精确（含 `expect` = 当前令牌、`params` 不含 `expect`、override 无 reason 时给 warning），且调用前后 run 目录**逐文件 mtime/size 不变**（只读硬证明） |
+| A3 | `tool.call.toolview` 登记 `condopt_draft` 且渲染不抛；「在面板中打开并预填」把 tell 草稿填进 textarea 且**不产生任何 `POST /api/exec`**；对比页多选后请求一次 `/api/compare` 且渲染表格 + SVG；zh/en 键集合一致 |
+
 ## 9. 已知风险（实现时按此处理）
 
 - **R1 样式污染**：dashboard.html 自带全局 CSS → 必须 shadow DOM。

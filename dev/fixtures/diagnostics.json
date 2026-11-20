@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "plugin": {
+    "name": "dsh-condopt",
+    "version": "0.3.0-fixture",
+    "node": "v22.23.4",
+    "dshEngine": ">=0.2.2-rc.1 <0.3.0"
+  },
+  "root": { "path": "D:\\condopt-fixture", "source": "config" },
+  "candidates": [
+    { "level": "request", "path": "", "valid": false, "detail": "missing" },
+    { "level": "env", "path": "", "valid": false, "detail": "missing" },
+    { "level": "config", "path": "D:\\condopt-fixture", "valid": true, "detail": "ok" },
+    { "level": "self", "path": "D:\\x\\dsh-plugin", "valid": false, "detail": "not-a-condopt-root" },
+    { "level": "session", "path": "D:\\s", "valid": false, "detail": "not-a-condopt-root" },
+    { "level": "workspace", "path": "", "valid": false, "detail": "missing" },
+    { "level": "cwd", "path": "D:\\cwd", "valid": false, "detail": "not-a-condopt-root" }
+  ],
+  "python": { "spec": "py -3", "ok": true, "probe": { "ok": true, "output": "Python 3.14.8" } },
+  "cli": { "path": "D:\\condopt-fixture\\scripts\\run_condopt.py", "ok": true },
+  "condopt": { "version": "0.1.0" },
+  "env": { "CONDOPT_ROOT": "D:\\condopt-fixture", "CONDOPT_PYTHON": "" },
+  "allowExec": true,
+  "degraded": []
+}

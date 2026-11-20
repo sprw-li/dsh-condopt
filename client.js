@@ -24,6 +24,8 @@ window.__ModuleLoader__.load({
     const TAB_KIND = 'condopt'
     /** 样式标签的 data-plugin-css 标记（DESIGN §7 指定的字符串）。 */
     const STYLE_ID = 'dsh-condopt/panel.css'
+    /** 本插件在 cordis 里的条目 id（DESIGN §0）：DSH 设置表单按它取。 */
+    const CONFIG_ENTRY_ID = 'condopt'
     /** 视图自动刷新周期：渲染走 host 缓存，不在这里重算（R2）。 */
     const AUTO_REFRESH_MS = 30000
     /** tell 回填的行数上限（DESIGN §8.6B：宿主 5000 行；这里只做预览期提示）。 */
@@ -64,7 +66,6 @@ window.__ModuleLoader__.load({
       'view.meta': '{bytes} 字节 · 生成于 {time}',
       'view.cached': '缓存命中',
       'view.rebuilt': '已重新渲染',
-      'view.shadowHint': 'dashboard 自带全局 CSS，已隔离在 shadow DOM 内，不会影响 DSH 界面。',
       'view.warnings': '警告',
       'params.algorithm': '算法',
       'params.specFailed': '读取算法目录失败：{message}',
@@ -200,6 +201,77 @@ window.__ModuleLoader__.load({
       'exec.staleHint': '原请求没有重试；「当前 study」已重新读取，令牌已更新。',
       'toolview.openPanel': '在条件优化面板中打开',
       'toolview.openHint': '在右侧栏打开条件优化面板并选中这个 study',
+      /* --- v3.0：摘要页（默认）/ iframe 视图 / 设置-诊断页 --- */
+      'subtab.summary': '摘要',
+      'summary.loading': '正在读取 study…',
+      'summary.failed': '读取 study 失败：{message}',
+      'summary.selectStudy': '请先选择一个 study',
+      'summary.study': 'Study',
+      'summary.algorithm': '算法',
+      'summary.objective': '目标',
+      'summary.direction': '方向',
+      'summary.budget': '预算',
+      'summary.used': '已用',
+      'summary.remaining': '剩余',
+      'summary.best': '最优',
+      'summary.observations': '观测数',
+      'summary.pending': '待回填',
+      'summary.token': '令牌',
+      'summary.step': '下一步',
+      'summary.stepHint': '还没有 step 信息：点「下一步」按钮才会调用（不会自动获取）。',
+      'summary.stepNext': '建议命令',
+      'summary.decisions': '最近决策',
+      'summary.noDecisions': '还没有决策记录',
+      'summary.openView': '打开完整视图',
+      'view.frameHint': '视图在 sandbox iframe 中渲染（禁脚本/表单，样式不外溢）；首次渲染可能要几秒。',
+      'view.frameTitle': '条件优化 dashboard',
+      'settings.title': '条件优化',
+      'settings.diagnostics': '宿主诊断',
+      'settings.diagLoading': '正在读取诊断…',
+      'settings.diagFailed': '读取诊断失败：{message}',
+      'settings.root': '根目录',
+      'settings.rootSource': '解析来源',
+      'settings.candidates': '根目录候选（七级，含不合法）',
+      'settings.candidateLevel': '级别',
+      'settings.candidatePath': '路径',
+      'settings.candidateValid': '合法',
+      'settings.candidateInvalid': '不合法',
+      'settings.candidateDetail': '说明',
+      'settings.python': 'Python',
+      'settings.pythonProbe': '版本探针',
+      'settings.cli': 'CLI 脚本',
+      'settings.pluginVersion': '插件版本',
+      'settings.condoptVersion': 'condopt 版本',
+      'settings.node': 'Node',
+      'settings.dshEngine': 'engines.dsh',
+      'settings.allowExec': '写接口 allowExec',
+      'settings.allowExecOn': '开启',
+      'settings.allowExecOff': '关闭（面板动作按钮禁用）',
+      'settings.env': '环境变量',
+      'settings.degraded': '宿主降级项',
+      'settings.degradedNone': '无',
+      'settings.registrations': '客户端注册结果',
+      'settings.registrationId': '注册项',
+      'settings.registrationState': '状态',
+      'settings.registrationOk': '成功',
+      'settings.registrationSkipped': '跳过',
+      'settings.registrationReason': '原因',
+      'settings.config': '配置方式',
+      'settings.configHint': '按优先级从高到低；本页只读，不写 profile。',
+      'settings.configEnvRoot': '环境变量 CONDOPT_ROOT：condopt 仓库根（同时含 scripts/run_condopt.py 与 src/condopt/cli.py）。',
+      'settings.configEnvPython': '环境变量 CONDOPT_PYTHON：python 解释器，如 "py -3" 或绝对路径。',
+      'settings.configProjectRoot': '插件配置 projectRoot：等价于 CONDOPT_ROOT，优先级更高。',
+      'settings.configPython': '插件配置 python：等价于 CONDOPT_PYTHON。',
+      'settings.configAllowExec': '插件配置 allowExec：false 时面板动作按钮全部禁用并显示提示。',
+      'settings.configFormsMissing': '当前客户端没有提供 configForms（或没有本条目的表单），无法在这里改配置；用上面的环境变量/配置文件即可。',
+      'settings.formTitle': '插件配置（DSH 设置表单）',
+      'settings.formProjectRoot': 'projectRoot',
+      'settings.formPython': 'python',
+      'settings.formAllowExec': 'allowExec',
+      'settings.formSave': '保存',
+      'settings.formSaved': '已保存',
+      'settings.formFailed': '保存失败：{message}',
+      'settings.formReadonly': '当前表单不支持保存（缺少 mutate），仅显示现值。',
     }
 
     const en = {
@@ -233,7 +305,6 @@ window.__ModuleLoader__.load({
       'view.meta': '{bytes} bytes · generated {time}',
       'view.cached': 'cache hit',
       'view.rebuilt': 're-rendered',
-      'view.shadowHint': 'The dashboard ships global CSS; it is isolated inside a shadow DOM and cannot affect the DSH UI.',
       'view.warnings': 'Warnings',
       'params.algorithm': 'Algorithm',
       'params.specFailed': 'Failed to read the algorithm catalog: {message}',
@@ -369,6 +440,77 @@ window.__ModuleLoader__.load({
       'exec.staleHint': 'The original request was not retried; "Current study" was re-read and the token is up to date.',
       'toolview.openPanel': 'Open in the condopt panel',
       'toolview.openHint': 'Open the condopt panel in the right sidebar and select this study',
+      /* --- v3.0: summary pane (default) / iframe view / settings & diagnostics --- */
+      'subtab.summary': 'Summary',
+      'summary.loading': 'Reading the study…',
+      'summary.failed': 'Failed to read the study: {message}',
+      'summary.selectStudy': 'Select a study first',
+      'summary.study': 'Study',
+      'summary.algorithm': 'Algorithm',
+      'summary.objective': 'Objective',
+      'summary.direction': 'Direction',
+      'summary.budget': 'Budget',
+      'summary.used': 'Used',
+      'summary.remaining': 'Remaining',
+      'summary.best': 'Best',
+      'summary.observations': 'Observations',
+      'summary.pending': 'Pending',
+      'summary.token': 'Token',
+      'summary.step': 'Next step',
+      'summary.stepHint': 'No step yet: it is fetched only when you press "Next step" (never automatically).',
+      'summary.stepNext': 'Suggested command',
+      'summary.decisions': 'Recent decisions',
+      'summary.noDecisions': 'No decision recorded yet',
+      'summary.openView': 'Open full dashboard',
+      'view.frameHint': 'The dashboard renders in a sandboxed iframe (no scripts/forms, styles cannot leak); the first render may take a few seconds.',
+      'view.frameTitle': 'condopt dashboard',
+      'settings.title': 'Condition optimization',
+      'settings.diagnostics': 'Host diagnostics',
+      'settings.diagLoading': 'Reading diagnostics…',
+      'settings.diagFailed': 'Failed to read diagnostics: {message}',
+      'settings.root': 'Root',
+      'settings.rootSource': 'Resolved from',
+      'settings.candidates': 'Root candidates (seven levels, including invalid ones)',
+      'settings.candidateLevel': 'Level',
+      'settings.candidatePath': 'Path',
+      'settings.candidateValid': 'valid',
+      'settings.candidateInvalid': 'invalid',
+      'settings.candidateDetail': 'Detail',
+      'settings.python': 'Python',
+      'settings.pythonProbe': 'Version probe',
+      'settings.cli': 'CLI script',
+      'settings.pluginVersion': 'Plugin version',
+      'settings.condoptVersion': 'condopt version',
+      'settings.node': 'Node',
+      'settings.dshEngine': 'engines.dsh',
+      'settings.allowExec': 'Write API allowExec',
+      'settings.allowExecOn': 'enabled',
+      'settings.allowExecOff': 'disabled (panel action buttons are greyed out)',
+      'settings.env': 'Environment',
+      'settings.degraded': 'Host-degraded capabilities',
+      'settings.degradedNone': 'none',
+      'settings.registrations': 'Client registrations',
+      'settings.registrationId': 'Registration',
+      'settings.registrationState': 'State',
+      'settings.registrationOk': 'ok',
+      'settings.registrationSkipped': 'skipped',
+      'settings.registrationReason': 'Reason',
+      'settings.config': 'How to configure',
+      'settings.configHint': 'Highest priority first; this page is read-only and does not write the profile.',
+      'settings.configEnvRoot': 'CONDOPT_ROOT: the condopt repository root (contains scripts/run_condopt.py and src/condopt/cli.py).',
+      'settings.configEnvPython': 'CONDOPT_PYTHON: the python interpreter, e.g. "py -3" or an absolute path.',
+      'settings.configProjectRoot': 'Plugin config projectRoot: same as CONDOPT_ROOT, higher priority.',
+      'settings.configPython': 'Plugin config python: same as CONDOPT_PYTHON.',
+      'settings.configAllowExec': 'Plugin config allowExec: false disables every panel action button and shows a hint.',
+      'settings.configFormsMissing': 'This client provides no configForms (or no form for this entry), so the config cannot be edited here; use the environment variables / config file above.',
+      'settings.formTitle': 'Plugin config (DSH settings form)',
+      'settings.formProjectRoot': 'projectRoot',
+      'settings.formPython': 'python',
+      'settings.formAllowExec': 'allowExec',
+      'settings.formSave': 'Save',
+      'settings.formSaved': 'Saved',
+      'settings.formFailed': 'Save failed: {message}',
+      'settings.formReadonly': 'This form cannot be saved (no mutate); showing current values only.',
     }
 
     /** 模块级翻译函数；apply() 里用 ctx.locale.bind 覆盖成真实实现。 */
@@ -409,7 +551,9 @@ window.__ModuleLoader__.load({
 .dco-card{display:flex;flex-direction:column;gap:6px;padding:9px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1)}
 .dco-card-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary)}
 .dco-pre{margin:0;padding:8px 9px;border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-layer-2);font:11px/1.55 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto}
-.dco-shadow-host{display:block;flex:1;min-height:360px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:#fff;overflow:auto}
+.dco-frame{display:block;width:100%;min-height:320px;max-height:70vh;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:#fff}
+.dco-settings{display:flex;flex-direction:column;gap:10px;max-width:820px;padding:4px 2px 10px}
+.dco-list{margin:0;padding-left:18px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.6}
 .dco-form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
 .dco-lbl{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--dsw-alias-label-secondary)}
 .dco-input{box-sizing:border-box;width:100%;height:26px;padding:0 7px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;outline:none}
@@ -628,6 +772,11 @@ window.__ModuleLoader__.load({
       return String(value)
     }
 
+    /** 缺失值统一显示「未知」（模块级：面板与设置页的诊断渲染共用）。 */
+    function unknownText(value) {
+      return value === null || value === undefined || value === '' ? tr('params.unknown') : displayValue(value)
+    }
+
     /** 读取「可能是数字」的输入：空 = null（不传），非法 = {ok:false}。 */
     function readNumber(text) {
       const raw = String(text === undefined || text === null ? '' : text).trim()
@@ -651,74 +800,77 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ *
-     * 视图：dashboard 的 css+html 写进 shadow root（R1）                  *
+     * 视图：dashboard 的 css+html 放进 sandboxed iframe（DESIGN §8.7 I）  *
      * ------------------------------------------------------------------ */
 
-    /** 清空并按序写入 style + canvas；任何 DOM 行为异常都只当作「没画上」。 */
-    function paintShadow(shadow, css, html) {
-      if (shadow === undefined || shadow === null) return
+    /** iframe 的 srcDoc 前缀：CSP 从文档内部再兜一层「不发外网请求」。 */
+    const FRAME_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:"
+
+    /**
+     * 把 dashboard 的 css+html 包成一个自洽的文档（DESIGN §8.7 I 逐字契约）。
+     *
+     * - 不拼 <script>：sandbox 没有 allow-scripts，脚本本来也不会跑；这里顺手把
+     *   宿主 html 里的 <script> 块剥掉，让「srcDoc 不含 <script」成为构造性事实，
+     *   而不是「取决于 condopt 的渲染器今天输出什么」；
+     * - CSP 的 default-src 'none' 从文档内部再兜一层「不发外网请求」。
+     */
+    function buildFrameDoc(css, html) {
+      const style = typeof css === 'string' ? css : ''
+      const source = typeof html === 'string' ? html : ''
+      /* 只剥 <script>…</script>（含跨行、大小写、带属性）；剥不干净也不影响安全，
+         因为 sandbox 与 CSP 都不允许脚本执行。 */
+      const body = source.replace(/<script\b[\s\S]*?<\/script\s*>/gi, '').replace(/<script\b[^>]*>/gi, '')
+      return '<!doctype html><html><head><meta charset="utf-8">'
+        + `<meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}">`
+        + `<style>${style}</style></head><body>${body}</body></html>`
+    }
+
+    /** 高度上限：70vh（超出则 iframe 内滚动）。 */
+    function frameMaxHeight() {
       try {
-        if (typeof shadow.replaceChildren === 'function') shadow.replaceChildren()
-        else if ('innerHTML' in shadow) shadow.innerHTML = ''
-        const doc = window.document
-        if (doc === undefined || typeof doc.createElement !== 'function') return
-        if (typeof shadow.appendChild !== 'function') return
-        const style = doc.createElement('style')
-        style.textContent = typeof css === 'string' ? css : ''
-        const canvas = doc.createElement('div')
-        canvas.className = 'dco-canvas'
-        try {
-          canvas.innerHTML = typeof html === 'string' ? html : ''
-        } catch {
-          canvas.innerHTML = ''
-        }
-        shadow.appendChild(style)
-        shadow.appendChild(canvas)
+        const height = window.innerHeight
+        if (typeof height === 'number' && Number.isFinite(height) && height > 0) return Math.round(height * 0.7)
       } catch {
-        /* 渲染失败由调用方展示错误态，这里绝不抛 */
+        /* 拿不到视口高度就交给固定 70vh */
       }
+      return 0
     }
 
     /**
-     * shadow DOM 宿主。
+     * 视图 iframe。
      *
-     * 用 ref 回调（而不是渲染期创建元素）拿真实 DOM 节点，再 attachShadow；
-     * css 与 html 变化时重画。ref 被卸载时会收到 null，此时必须同时清掉
-     * 元素与 shadow 引用，否则换 run（key 变化 → 重挂载）后画到旧的 detached 树上。
-     * 离线 harness 若要覆盖这条路径，在 build/render 时把 props.ref 用带
-     * attachShadow 的假元素调用一次即可。
+     * `sandbox="allow-same-origin"`：禁脚本/表单/导航，但保留父页读
+     * `contentDocument` 做高度自适应的能力。读不到就退回固定 70vh。
      */
-    function ShadowHtml(props) {
-      const shadowRef = React.useRef(null)
-      const hostRef = React.useRef(null)
-      const css = typeof props.css === 'string' ? props.css : ''
-      const html = typeof props.html === 'string' ? props.html : ''
+    function ViewFrame(props) {
+      const [height, setHeight] = React.useState('70vh')
+      const doc = buildFrameDoc(props.css, props.html)
 
-      const attach = (element) => {
-        if (element === undefined || element === null) {
-          hostRef.current = null
-          shadowRef.current = null
-          return
-        }
-        if (hostRef.current === element) return
-        hostRef.current = element
-        let shadow = null
+      const onLoad = (event) => {
         try {
-          shadow = typeof element.attachShadow === 'function' ? element.attachShadow({ mode: 'open' }) : null
+          const frame = isObject(event) && isObject(event.target) ? event.target : null
+          const body = frame !== null && isObject(frame.contentDocument) && isObject(frame.contentDocument.body)
+            ? frame.contentDocument.body
+            : null
+          const scrollHeight = body !== null ? Number(body.scrollHeight) : NaN
+          if (Number.isFinite(scrollHeight) === false || scrollHeight <= 0) return
+          const limit = frameMaxHeight()
+          const wanted = limit > 0 ? Math.min(scrollHeight + 8, limit) : scrollHeight + 8
+          setHeight(`${Math.round(wanted)}px`)
         } catch {
-          shadow = null
+          /* 读不到 contentDocument（跨源/未就绪）→ 保持固定 70vh */
         }
-        shadowRef.current = shadow
-        /* 提交时就画一次：避免先出现一个空 shadow，再等 effect 补画。
-           css/html 变化由下面的 effect 重画（paintShadow 是幂等的）。 */
-        if (shadow !== null) paintShadow(shadow, css, html)
       }
 
-      React.useEffect(() => {
-        paintShadow(shadowRef.current, css, html)
-      }, [css, html])
-
-      return h('div', { className: 'dco-shadow-host', ref: attach })
+      return h('iframe', {
+        className: 'dco-frame',
+        title: typeof props.title === 'string' ? props.title : '',
+        sandbox: 'allow-same-origin',
+        referrerPolicy: 'no-referrer',
+        srcDoc: doc,
+        style: { height },
+        onLoad,
+      })
     }
 
     /* ------------------------------------------------------------------ *
@@ -903,6 +1055,261 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ *
+     * 客户端注册结果（设置页的自查面，DESIGN §8.7G 第 2 块）              *
+     * ------------------------------------------------------------------ */
+
+    /** apply() 期间逐项记录；设置页原样展示「装好了但没面板」时缺在哪一环。 */
+    let registrationLog = []
+    /** 样式是否真的注入了（供 registrationLog 记账）。 */
+    let styleInjected = false
+
+    function noteRegistration(id, ok, reason) {
+      registrationLog.push({ id, ok: ok === true, reason: typeof reason === 'string' ? reason : '' })
+    }
+
+    /** 只读地读一个可能不存在的配置表单快照。 */
+    function snapshotOf(form) {
+      if (isObject(form) === false || typeof form.getSnapshot !== 'function') return null
+      try {
+        const snap = form.getSnapshot()
+        return isObject(snap) ? snap : null
+      } catch {
+        return null
+      }
+    }
+
+    /**
+     * DSH 设置页里的「条件优化」小节（DESIGN §8.7G）。
+     *
+     * 三块：宿主诊断（`/api/diagnostics` 原样渲染）/ 客户端注册结果 /
+     * 配置方式（`configForms` 存在时内嵌其表单，缺失只给说明）。**不写 profile。**
+     */
+    function CondoptSettingsSection(props) {
+      const t = typeof props.t === 'function' ? props.t : tr
+      const [diag, setDiag] = React.useState({ status: 'idle', data: null, error: '' })
+      const [form, setForm] = React.useState(null)
+      const [draft, setDraft] = React.useState({ projectRoot: '', python: '', allowExec: true })
+      const [formNote, setFormNote] = React.useState('')
+
+      React.useEffect(() => {
+        let alive = true
+        void (async () => {
+          /* 重跑时保留已有数据：React 的 StrictMode / 离线 harness 会重放 effect，
+             不能让它把「已经拿到的诊断」打回未知。 */
+          setDiag((current) => ({ status: 'loading', data: current.data, error: '' }))
+          try {
+            const data = await fetchJson(`${API}/diagnostics`)
+            if (alive !== true) return
+            setDiag({ status: 'ready', data: isObject(data) ? data : null, error: '' })
+          } catch (error) {
+            if (alive !== true) return
+            setDiag({ status: 'error', data: null, error: messageOf(error) })
+          }
+        })()
+        return () => {
+          alive = false
+        }
+      }, [])
+
+      /* feature detect：拿不到 configForms（或没有本条目）就只给说明。 */
+      React.useEffect(() => {
+        try {
+          const forms = service('configForms')
+          if (isObject(forms) === false || typeof forms.get !== 'function') {
+            setFormNote(t('settings.configFormsMissing'))
+            return
+          }
+          const bound = forms.get(CONFIG_ENTRY_ID)
+          if (bound === null || bound === undefined) {
+            setFormNote(t('settings.configFormsMissing'))
+            return
+          }
+          setForm(bound)
+          const snap = snapshotOf(bound)
+          const value = snap !== null && isObject(snap.value) ? snap.value : {}
+          setDraft({
+            projectRoot: typeof value.projectRoot === 'string' ? value.projectRoot : '',
+            python: typeof value.python === 'string' ? value.python : '',
+            allowExec: value.allowExec !== false,
+          })
+          if (typeof bound.mutate !== 'function') setFormNote(t('settings.formReadonly'))
+        } catch {
+          setFormNote(t('settings.configFormsMissing'))
+        }
+      }, [])
+
+      async function save() {
+        if (isObject(form) === false || typeof form.mutate !== 'function') return
+        const snap = snapshotOf(form)
+        const revision = snap !== null && typeof snap.revision === 'number' ? snap.revision : undefined
+        setFormNote(t('panel.loading'))
+        try {
+          await form.mutate([
+            { op: 'set', path: ['projectRoot'], value: draft.projectRoot },
+            { op: 'set', path: ['python'], value: draft.python },
+            { op: 'set', path: ['allowExec'], value: draft.allowExec },
+          ], revision)
+          setFormNote(t('settings.formSaved'))
+        } catch (error) {
+          setFormNote(t('settings.formFailed', { message: messageOf(error) }))
+        }
+      }
+
+      const nodes = [h('div', { key: 'title', className: 'dco-card-title' }, t('settings.title'))]
+      const diagData = isObject(diag.data) ? diag.data : null
+
+      /* ① 宿主诊断：有数据就渲染（重跑 effect 时也不闪回占位）。 */
+      nodes.push(h('div', { key: 'diag', className: 'dco-card' },
+        h('div', { className: 'dco-card-title' }, t('settings.diagnostics')),
+        diagData !== null
+          ? diagnosticsBody(diagData, t)
+          : diag.status === 'error'
+            ? h('div', { className: 'dco-err' }, t('settings.diagFailed', { message: diag.error }))
+            : h('div', { className: 'dco-note' }, t('settings.diagLoading')),
+      ))
+
+      /* ② 客户端注册结果 */
+      nodes.push(h('div', { key: 'reg', className: 'dco-card' },
+        h('div', { className: 'dco-card-title' }, t('settings.registrations')),
+        h('table', { className: 'dco-table' },
+          h('thead', null, h('tr', null,
+            h('th', null, t('settings.registrationId')),
+            h('th', null, t('settings.registrationState')),
+            h('th', null, t('settings.registrationReason')))),
+          h('tbody', null, registrationLog.map((entry, index) => h('tr', { key: `${index}:${entry.id}` },
+            h('td', null, entry.id),
+            h('td', { className: entry.ok === true ? 'dco-ok' : 'dco-dim' },
+              entry.ok === true ? t('settings.registrationOk') : t('settings.registrationSkipped')),
+            h('td', { className: 'dco-dim' }, entry.reason !== '' ? entry.reason : '—'),
+          ))),
+        ),
+      ))
+
+      /* ③ 配置方式 */
+      nodes.push(h('div', { key: 'config', className: 'dco-card' },
+        h('div', { className: 'dco-card-title' }, t('settings.config')),
+        h('div', { className: 'dco-note' }, t('settings.configHint')),
+        h('ul', { className: 'dco-list' },
+          h('li', null, t('settings.configEnvRoot')),
+          h('li', null, t('settings.configEnvPython')),
+          h('li', null, t('settings.configProjectRoot')),
+          h('li', null, t('settings.configPython')),
+          h('li', null, t('settings.configAllowExec')),
+        ),
+      ))
+
+      /* configForms（若可用） */
+      nodes.push(h('div', { key: 'form', className: 'dco-card' },
+        h('div', { className: 'dco-card-title' }, t('settings.formTitle')),
+        isObject(form) === false || typeof form.mutate !== 'function'
+          ? h('div', { className: 'dco-note' }, formNote !== '' ? formNote : t('settings.configFormsMissing'))
+          : h('div', null,
+              h('div', { className: 'dco-form-grid' },
+                h('label', { className: 'dco-lbl' },
+                  h('span', null, t('settings.formProjectRoot')),
+                  h('input', {
+                    className: 'dco-input', type: 'text', value: draft.projectRoot,
+                    onChange: (event) => setDraft((current) => Object.assign({}, current, { projectRoot: eventValue(event) })),
+                  }),
+                ),
+                h('label', { className: 'dco-lbl' },
+                  h('span', null, t('settings.formPython')),
+                  h('input', {
+                    className: 'dco-input', type: 'text', value: draft.python,
+                    onChange: (event) => setDraft((current) => Object.assign({}, current, { python: eventValue(event) })),
+                  }),
+                ),
+                h('label', { className: 'dco-toggle' },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: draft.allowExec === true,
+                    onChange: (event) => {
+                      const checked = isObject(event) && isObject(event.target) && typeof event.target.checked === 'boolean'
+                        ? event.target.checked
+                        : null
+                      if (checked === null) return
+                      setDraft((current) => Object.assign({}, current, { allowExec: checked }))
+                    },
+                  }),
+                  h('span', null, t('settings.formAllowExec')),
+                ),
+              ),
+              h('div', { className: 'dco-row' },
+                h('button', { type: 'button', className: 'dco-btn dco-primary', onClick: () => void save() },
+                  t('settings.formSave')),
+                formNote !== '' ? h('span', { className: 'dco-dim' }, formNote) : null,
+              ),
+            ),
+      ))
+
+      return h('div', { className: 'dco-settings' }, nodes)
+    }
+
+    /** `/api/diagnostics` 的只读渲染。 */
+    function diagnosticsBody(data, t) {
+      if (isObject(data) === false) return h('div', { className: 'dco-note' }, t('params.unknown'))
+      const nodes = []
+      const plugin = isObject(data.plugin) ? data.plugin : {}
+      const root = isObject(data.root) ? data.root : {}
+      const python = isObject(data.python) ? data.python : {}
+      const probe = isObject(python.probe) ? python.probe : null
+      const cli = isObject(data.cli) ? data.cli : {}
+      const condopt = isObject(data.condopt) ? data.condopt : {}
+      const env = isObject(data.env) ? data.env : {}
+
+      nodes.push(h('table', { key: 'facts', className: 'dco-table' }, h('tbody', null, [
+        [t('settings.root'), root.path !== undefined && root.path !== null ? String(root.path) : t('params.unknown')],
+        [t('settings.rootSource'), root.source !== undefined && root.source !== null ? String(root.source) : t('params.unknown')],
+        [t('settings.python'), python.spec !== undefined && python.spec !== null ? String(python.spec) : t('params.unknown')],
+        [t('settings.pythonProbe'), probe === null
+          ? t('params.unknown')
+          : `${probe.ok === true ? t('settings.registrationOk') : t('settings.registrationSkipped')}`
+            + (typeof probe.output === 'string' && probe.output !== '' ? ` · ${probe.output.trim()}` : '')
+            + (typeof probe.error === 'string' && probe.error !== '' ? ` · ${probe.error}` : '')],
+        [t('settings.cli'), `${cli.path === undefined || cli.path === null ? t('params.unknown') : String(cli.path)}`
+          + ` · ${cli.ok === true ? t('settings.registrationOk') : t('settings.registrationSkipped')}`],
+        [t('settings.pluginVersion'), plugin.version !== undefined && plugin.version !== null ? String(plugin.version) : t('params.unknown')],
+        [t('settings.condoptVersion'), condopt.version !== undefined && condopt.version !== null ? String(condopt.version) : t('params.unknown')],
+        [t('settings.node'), plugin.node !== undefined && plugin.node !== null ? String(plugin.node) : t('params.unknown')],
+        [t('settings.dshEngine'), plugin.dshEngine !== undefined && plugin.dshEngine !== null ? String(plugin.dshEngine) : t('params.unknown')],
+        [t('settings.allowExec'), data.allowExec === false ? t('settings.allowExecOff') : t('settings.allowExecOn')],
+        [t('settings.env'), [env.CONDOPT_ROOT, env.CONDOPT_PYTHON].filter((v) => typeof v === 'string' && v !== '').join(' · ') || t('settings.degradedNone')],
+      ].map((pair, index) => h('tr', { key: `${index}:${pair[0]}` },
+        h('td', { className: 'dco-dim' }, pair[0]),
+        h('td', null, pair[1]),
+      )))))
+
+      const candidates = Array.isArray(data.candidates) ? data.candidates.filter((row) => isObject(row)) : []
+      nodes.push(h('div', { key: 'cand-title', className: 'dco-card-title' }, t('settings.candidates')))
+      nodes.push(candidates.length === 0
+        ? h('div', { key: 'cand-empty', className: 'dco-note' }, t('params.unknown'))
+        : h('table', { key: 'cand', className: 'dco-table' },
+            h('thead', null, h('tr', null,
+              h('th', null, t('settings.candidateLevel')),
+              h('th', null, t('settings.candidatePath')),
+              h('th', null, t('settings.candidateValid')),
+              h('th', null, t('settings.candidateDetail')))),
+            h('tbody', null, candidates.map((row, index) => h('tr', { key: `${index}:${String(row.level || '')}` },
+              h('td', { className: 'dco-dim' }, unknownText(row.level)),
+              h('td', null, unknownText(row.path)),
+              h('td', { className: row.valid === true ? 'dco-ok' : 'dco-err' },
+                row.valid === true ? t('settings.candidateValid') : t('settings.candidateInvalid')),
+              h('td', { className: 'dco-dim' }, unknownText(row.detail)),
+            ))),
+          ))
+
+      const degraded = Array.isArray(data.degraded) ? data.degraded.filter((row) => isObject(row)) : []
+      nodes.push(h('div', { key: 'deg-title', className: 'dco-card-title' }, t('settings.degraded')))
+      nodes.push(degraded.length === 0
+        ? h('div', { key: 'deg-none', className: 'dco-note' }, t('settings.degradedNone'))
+        : h('div', { key: 'deg' }, degraded.map((row, index) => h('div', {
+            key: `${index}:${String(row.id || '')}`,
+            className: 'dco-warn',
+          }, `${unknownText(row.id)}: ${unknownText(row.reason)}`))))
+      return h('div', null, nodes)
+    }
+
+    /* ------------------------------------------------------------------ *
      * 打开右侧栏（与 council 同款：layout.openRightbar + openTab(kind)）  *
      * ------------------------------------------------------------------ */
 
@@ -961,7 +1368,8 @@ window.__ModuleLoader__.load({
      * ------------------------------------------------------------------ */
 
     /** 三个子页签。 */
-    const PANES = ['view', 'params', 'decisions']
+    /** 子页签顺序（DESIGN §8.7H：摘要默认，视图懒加载）。 */
+    const PANES = ['summary', 'view', 'params', 'decisions']
 
     /**
      * 右侧栏面板本体。
@@ -977,7 +1385,7 @@ window.__ModuleLoader__.load({
       const [studiesError, setStudiesError] = React.useState('')
       const [loadingStudies, setLoadingStudies] = React.useState(true)
       const [run, setRun] = React.useState('')
-      const [pane, setPane] = React.useState('view')
+      const [pane, setPane] = React.useState('summary')
       const [auto, setAuto] = React.useState(true)
       const [view, setView] = React.useState({ status: 'idle', run: '', data: null, error: '', force: false })
       const [spec, setSpec] = React.useState({ status: 'idle', data: null, error: '' })
@@ -1137,7 +1545,12 @@ window.__ModuleLoader__.load({
         }
       }
 
-      /** 某个子页签需要的数据；点击页签与 effect 都走这里，保证只发一次请求。 */
+      /**
+       * 某个子页签需要的数据；点击页签与 effect 都走这里，保证只发一次请求。
+       *
+       * DESIGN §8.7H：**摘要页只读 `/api/study`**，视图页懒加载（只有真的切过去
+       * 或点「打开完整视图」才请求 `/api/view`）。
+       */
       function ensurePaneData(name, targetRun) {
         const wanted = typeof targetRun === 'string' && targetRun !== '' ? targetRun : run
         if (wanted === '') return
@@ -1147,8 +1560,9 @@ window.__ModuleLoader__.load({
           if (spec.status !== 'ready' && spec.status !== 'loading') void loadSpec()
           /* v2.0：「当前 study」块与写操作的 expect 都来自 /api/study，参数页必须也读它。 */
           if (study.run !== wanted) void loadStudy(false, wanted)
-        } else if (study.run !== wanted) {
-          void loadStudy(false, wanted)
+        } else {
+          /* summary / decisions 都只要 /api/study。 */
+          if (study.run !== wanted) void loadStudy(false, wanted)
         }
       }
 
@@ -1167,14 +1581,17 @@ window.__ModuleLoader__.load({
         }
         apply(pendingSelection)
         selectionListeners.add(apply)
-        /* 挂载时就接上视图加载：不让首次出图依赖「再渲染一轮」的 effect 时机。 */
+        /* 挂载时就接上**摘要页**的数据：只取 /api/study（DESIGN §8.7H 不允许首屏拉
+           /api/view，那份 ~2s 的渲染留给「打开完整视图」时再做）。spec 是轻量目录，
+           顺手取回来，参数页与覆写块就能立刻渲染。 */
+        void loadSpec()
         void (async () => {
           const chosen = await loadStudies()
           if (aliveRef.current !== true) return
           const wanted = pendingSelection !== null && typeof pendingSelection.run === 'string' && pendingSelection.run !== ''
             ? pendingSelection.run
             : chosen
-          if (typeof wanted === 'string' && wanted !== '') void loadView(false, wanted)
+          if (typeof wanted === 'string' && wanted !== '') void loadStudy(false, wanted)
         })()
         return () => {
           selectionListeners.delete(apply)
@@ -1494,11 +1911,6 @@ window.__ModuleLoader__.load({
         return null
       }
 
-      /** 缺失值统一显示「未知」。 */
-      function unknownText(value) {
-        return value === null || value === undefined || value === '' ? t('params.unknown') : displayValue(value)
-      }
-
       /** 状态令牌只显示前 8 位（DESIGN §8.6C：面板显示令牌前 8 位）。 */
       function shortToken(token) {
         return typeof token === 'string' && token !== '' ? token.slice(0, 8) : t('params.unknown')
@@ -1580,8 +1992,9 @@ window.__ModuleLoader__.load({
                 void loadHealth()
                 void loadStudies()
                 if (run !== '') {
-                  void loadView(false, run)
                   void loadStudy(true, run)
+                  /* 视图页懒加载：只有已加载过视图时才顺带刷新它（不触发首屏渲染）。 */
+                  if (pane === 'view' && view.run === run) void loadView(false, run)
                 }
               },
             }, t('panel.refresh')),
@@ -1674,11 +2087,12 @@ window.__ModuleLoader__.load({
               type: 'button',
               className: 'dco-btn dco-primary',
               disabled: view.status === 'loading',
+              /* 只有「强制重新生成」才带 ?force=1；普通点击复用宿主缓存。 */
               onClick: () => void loadView(viewData !== null, run),
             }, viewData === null ? t('view.generate') : t('view.regenerate')),
             h('span', { className: 'dco-dim' }, meta.join(' · ')),
           ),
-          h('div', { key: 'note', className: 'dco-note' }, t('view.shadowHint')),
+          h('div', { key: 'note', className: 'dco-note' }, t('view.frameHint')),
           view.status === 'error'
             ? h('div', { key: 'err', className: 'dco-err' }, t('view.failed', { message: view.error }))
             : null,
@@ -1696,13 +2110,111 @@ window.__ModuleLoader__.load({
             : null,
           viewData === null
             ? (view.status === 'idle' ? h('div', { key: 'idle', className: 'dco-note' }, t('view.idle')) : null)
-            : h(ShadowHtml, {
-                key: `shadow:${view.run}`,
+            : h(ViewFrame, {
+                key: `frame:${view.run}`,
+                title: t('view.frameTitle'),
                 css: typeof viewData.css === 'string' ? viewData.css : '',
                 html: typeof viewData.html === 'string' ? viewData.html : '',
               }),
           h('div', { key: 'warn' }, warningList(viewData === null ? null : viewData.warnings)),
         ]
+      }
+
+      /**
+       * 摘要页（默认页，DESIGN §8.7H）。
+       *
+       * **只读 `/api/study`**：首屏不再等 dashboard 渲染；要图的用户点
+       * 「打开完整视图」切到视图页（那时才会请求 `/api/view`）。
+       */
+      function summaryPane() {
+        if (run === '') return h('div', { className: 'dco-note' }, t('summary.selectStudy'))
+        const current = studyData !== null && isObject(studyData.current) ? studyData.current : null
+        const report = studyData !== null && isObject(studyData.report) ? studyData.report : null
+        const step = studyData !== null && isObject(studyData.step) ? studyData.step : null
+        const decisionList = studyData !== null && isObject(studyData.decisions)
+          && Array.isArray(studyData.decisions.decisions)
+          ? studyData.decisions.decisions.filter((row) => isObject(row)).slice(-3)
+          : []
+        const nodes = []
+
+        nodes.push(h('div', { key: 'bar', className: 'dco-row' },
+          h('button', {
+            type: 'button',
+            className: 'dco-btn dco-primary',
+            disabled: study.status === 'loading',
+            onClick: () => void loadStudy(true, run),
+          }, t('params.reloadCurrent')),
+          h('button', {
+            type: 'button',
+            className: 'dco-btn',
+            onClick: () => {
+              /* 懒加载：切到视图页的同时立刻取数（不等下一轮 effect）。 */
+              setPane('view')
+              ensurePaneData('view', run)
+            },
+          }, t('summary.openView')),
+        ))
+
+        if (study.status === 'error') {
+          nodes.push(h('div', { key: 'err', className: 'dco-err' }, t('summary.failed', { message: study.error })))
+        }
+        if (study.status === 'loading' && studyData === null) {
+          nodes.push(h('div', { key: 'loading', className: 'dco-row' },
+            h('span', { className: 'dco-spinner', 'aria-hidden': true }),
+            h('span', { className: 'dco-dim' }, t('summary.loading')),
+          ))
+        }
+
+        if (studyData !== null) {
+          nodes.push(h('table', { key: 'facts', className: 'dco-table' }, h('tbody', null, [
+            [t('summary.study'), run],
+            [t('summary.algorithm'), (current !== null ? current.algorithm : null) ?? (report !== null ? report.algorithm : null)],
+            [t('summary.objective'), (current !== null ? current.objective : null) ?? (report !== null ? report.objective : null)],
+            [t('summary.direction'), current !== null ? current.direction : null],
+            [t('summary.budget'), (current !== null ? current.budget : null) ?? (report !== null ? report.budget : null)],
+            [t('summary.used'), report !== null ? report.used : null],
+            [t('summary.remaining'), (current !== null ? current.remaining : null) ?? (report !== null ? report.remaining : null)],
+            [t('summary.best'), report !== null ? formatScore(report.best_score) : null],
+            [t('summary.observations'), (current !== null ? current.nObservations : null) ?? (report !== null ? report.n_observations : null)],
+            [t('summary.pending'), pendingCountOfData(studyData)],
+            [t('summary.token'), shortToken(studyData.stateToken)],
+          ].map((pair, index) => h('tr', { key: `${index}:${pair[0]}` },
+            h('td', { className: 'dco-dim' }, pair[0]),
+            h('td', null, unknownText(pair[1])),
+          )))))
+
+          /* step：没有就提示手动获取，绝不自动调（R4：step 会写 run/step.json）。 */
+          nodes.push(h('div', { key: 'step', className: 'dco-card' },
+            h('div', { className: 'dco-card-title' }, t('summary.step')),
+            step === null
+              ? h('div', { className: 'dco-note' }, t('summary.stepHint'))
+              : h('div', null,
+                  h('div', null, unknownText(step.action)),
+                  step.next_command !== undefined && step.next_command !== null
+                    ? h('div', { className: 'dco-dim' }, `${t('summary.stepNext')}: ${displayValue(step.next_command)}`)
+                    : null,
+                ),
+          ))
+
+          nodes.push(h('div', { key: 'dec', className: 'dco-card' },
+            h('div', { className: 'dco-card-title' }, t('summary.decisions')),
+            decisionList.length === 0
+              ? h('div', { className: 'dco-note' }, t('summary.noDecisions'))
+              : h('div', { className: 'dco-timeline' }, decisionList.map((row, index) => h('div', {
+                  key: `${index}:${String(row.seq === undefined ? index : row.seq)}`,
+                  className: 'dco-entry',
+                },
+                  h('div', { className: 'dco-entry-t' }, formatTime(row.t)),
+                  h('div', { className: 'dco-entry-head' },
+                    `${displayValue(row.action)} · ${displayValue(row.algorithm)}`),
+                  h('div', { className: 'dco-entry-body' },
+                    typeof row.reason === 'string' && row.reason !== '' ? row.reason : '—'),
+                ))),
+          ))
+
+          nodes.push(h('div', { key: 'warn' }, warningList(studyData.warnings)))
+        }
+        return nodes
       }
 
       /**
@@ -2281,6 +2793,8 @@ window.__ModuleLoader__.load({
         ]
       } else if (rows.length === 0) {
         body = emptyState()
+      } else if (pane === 'summary') {
+        body = summaryPane()
       } else if (pane === 'view') {
         body = viewPane()
       } else if (pane === 'params') {
@@ -2379,19 +2893,31 @@ window.__ModuleLoader__.load({
 
         track(effect(() => teardown, 'condopt: instance'))
 
+        /* 设置页的自查面：apply 期间每项注册成功/跳过都记一条（DESIGN §8.7G）。 */
+        registrationLog = []
+        styleInjected = false
+
         /* locale：注册字典 + 绑定翻译；缺一个都不影响后面的注册。 */
         try {
           if (ctx !== undefined && ctx !== null && isObject(ctx.locale)) {
             if (typeof ctx.locale.register === 'function') {
               track(effect(() => ctx.locale.register(NS, { zh, en }), 'condopt: dictionaries'))
+              noteRegistration('locale.register', true, '')
+            } else {
+              noteRegistration('locale.register', false, 'ctx.locale.register 不可用')
             }
             if (typeof ctx.locale.bind === 'function') {
               const bound = ctx.locale.bind(NS)
               if (typeof bound === 'function') tr = bound
+              noteRegistration('locale.bind', typeof bound === 'function', 'bind 未返回函数')
+            } else {
+              noteRegistration('locale.bind', false, 'ctx.locale.bind 不可用')
             }
+          } else {
+            noteRegistration('locale', false, 'ctx.locale 不可用')
           }
-        } catch {
-          /* locale 不可用时保留 key 原文 */
+        } catch (error) {
+          noteRegistration('locale', false, messageOf(error))
         }
 
         /* 样式一次性注入，teardown 时移除。 */
@@ -2418,7 +2944,10 @@ window.__ModuleLoader__.load({
                 tag.dataset.pluginCss = STYLE_ID
               }
               tag.textContent = CSS
-              if (isObject(doc.head) && typeof doc.head.appendChild === 'function') doc.head.appendChild(tag)
+              if (isObject(doc.head) && typeof doc.head.appendChild === 'function') {
+                doc.head.appendChild(tag)
+                styleInjected = true
+              }
             } catch {
               /* 样式注入失败只意味着没有自定义外观，功能仍可用 */
               return undefined
@@ -2428,6 +2957,7 @@ window.__ModuleLoader__.load({
             if (created && tag !== null && typeof tag.remove === 'function') tag.remove()
           }
         }, 'condopt: styles'))
+        noteRegistration('styles(panel.css)', styleInjected === true, styleInjected === true ? '' : 'document 不可用或注入失败')
 
         const slots = ctx === undefined || ctx === null ? undefined : ctx.slots
 
@@ -2435,8 +2965,11 @@ window.__ModuleLoader__.load({
         if (isObject(slots) && typeof slots.inject === 'function') {
           track(slots.inject('sidebar.right.pane.tab', () => {
             try {
-              return slots.register({ name: 'sidebar.right.pane.tab', key: TAB_ID, locale: NS }, CondoptTab)
-            } catch {
+              const dispose = slots.register({ name: 'sidebar.right.pane.tab', key: TAB_ID, locale: NS }, CondoptTab)
+              noteRegistration('slot:sidebar.right.pane.tab', true, '')
+              return dispose
+            } catch (error) {
+              noteRegistration('slot:sidebar.right.pane.tab', false, messageOf(error))
               return undefined
             }
           }))
@@ -2444,11 +2977,47 @@ window.__ModuleLoader__.load({
           /* 对话内工具卡：key 必须与 agent 工具名逐字相同。 */
           track(slots.inject('tool.call.toolview', () => {
             try {
-              return slots.register({ name: 'tool.call.toolview', key: 'condopt_view', locale: NS }, CondoptViewRow)
-            } catch {
+              const dispose = slots.register({ name: 'tool.call.toolview', key: 'condopt_view', locale: NS }, CondoptViewRow)
+              noteRegistration('slot:tool.call.toolview(condopt_view)', true, '')
+              return dispose
+            } catch (error) {
+              noteRegistration('slot:tool.call.toolview(condopt_view)', false, messageOf(error))
               return undefined
             }
           }))
+
+          /* 设置页小节（DESIGN §8.7G）：DSH 版本没有这个 slot 时跳过，不影响其它入口。 */
+          track(slots.inject('settings.section', () => {
+            try {
+              const dispose = slots.register({
+                name: 'settings.section',
+                id: CONFIG_ENTRY_ID,
+                order: 60,
+                label: () => tr('settings.title'),
+                locale: NS,
+              }, CondoptSettingsSection)
+              noteRegistration('slot:settings.section(condopt)', true, '')
+              return dispose
+            } catch (error) {
+              noteRegistration('slot:settings.section(condopt)', false, messageOf(error))
+              return undefined
+            }
+          }))
+        } else {
+          noteRegistration('slot:*', false, 'ctx.slots.inject 不可用（DSH 版本漂移？）')
+        }
+
+        /* configForms：设置页内嵌 Host 表单用的；缺失只影响那一块。 */
+        try {
+          const forms = service('configForms')
+          if (isObject(forms) && typeof forms.get === 'function') {
+            const bound = forms.get(CONFIG_ENTRY_ID)
+            noteRegistration('configForms.get(condopt)', bound !== null && bound !== undefined, '没有本插件的表单')
+          } else {
+            noteRegistration('configForms.get(condopt)', false, '客户端没有 configForms 服务')
+          }
+        } catch (error) {
+          noteRegistration('configForms.get(condopt)', false, messageOf(error))
         }
 
         /* 侧栏 tab 类型：服务缺失则跳过（不注册就只是没有这个入口）。 */

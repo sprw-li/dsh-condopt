@@ -145,6 +145,23 @@ CSV（表头含 `id`；CSV 必须带条件列，JSON/JSONL 可只给 `{id,y}`）
 含 `{run,resultsRows,format,pendingBefore,pendingAfter,datasetBefore,datasetAfter,acceptedRows,
 stateTokenBefore,stateTokenAfter}`（前后计数由宿主自行读 run 目录得出，不信任 stdout）。
 
+## v3.0 第一波用法（诊断页 / 摘要默认 / sandboxed iframe）
+
+- **摘要页默认**：面板子页签为 **摘要（默认）｜视图｜参数｜决策**。摘要页**只调 `GET /api/study`**，
+  显示 study 名 / 算法 / 目标与方向 / 预算·已用·剩余 / 最优 / 观测数 / 待回填数 / `stateToken` 前 8 位 /
+  `step.action`+`next_command` / 最近 3 条决策 / warnings，末尾「打开完整视图」切到视图页。
+  **挂载面板不再请求 `/api/view`**（首屏不为 ~2s 渲染买单）。
+- **视图懒加载 + sandboxed iframe**：只有切到视图页（或点「打开完整视图」）才请求 `/api/view`，
+  `?force=1` 只由「强制重新生成」触发；渲染改为
+  `<iframe sandbox="allow-same-origin" referrerPolicy="no-referrer" srcDoc={doc}>`，
+  `doc` 内置 CSP `default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:`，
+  **不再使用 shadow DOM**（禁脚本/表单/导航，样式不外溢；父页仍可读 `contentDocument` 自适应高度，上限 70vh）。
+- **设置/诊断页**：DSH 设置里新增「条件优化」分区（`settings.section`，id `condopt`，只读、不写 profile）：
+  1. **宿主诊断** `GET /condopt/api/diagnostics`：七级 root 候选（含不合法项与原因）、python 版本探测
+     （5s 超时，失败/超时都 200 + `ok:false`）、CLI/condopt/plugin 版本、`env`、`allowExec`、`degraded`；
+  2. **客户端注册结果**：每个 slot/命令/工具注册成功或跳过的原因；
+  3. **配置方式**：`CONDOPT_ROOT`/`CONDOPT_PYTHON`/config `projectRoot|python|allowExec`；有 `configForms` 时内嵌表单，否则只给说明。
+
 ## agent 工具
 
 `condopt_view`：`{root?, run?, include?}`（`include` 枚举 `report|step|pending|decisions|pareto`，
@@ -159,7 +176,7 @@ stateTokenBefore,stateTokenAfter}`（前后计数由宿主自行读 run 目录�
 ```powershell
 cd dsh-plugin
 node --check index.js; node --check client.js     # A1
-node dev/verify-client.mjs                        # A3：node:vm 加载 client.js，100 条断言（完全离线）
+node dev/verify-client.mjs                        # A3：node:vm 加载 client.js，127 条断言（完全离线）
 node dev/verify-host.mjs                          # A2：真加载 index.js
 node dev/verify-host.mjs --skip-real              # 不跑 python 的纯离线模式
 ```
@@ -168,9 +185,9 @@ A2 的三种典型结果（都是 exit 0）：
 
 | 场景 | 结果 |
 |---|---|
-| 真仓库（`link:` 安装布局） | 受限沙箱 `277/283 + 6 SKIP`；可写环境 `315/315` |
-| 独立 clone、**没设环境变量**、旁边没有 condopt 检出 | `199/217 + 18 SKIP`——导出面/纯函数/解析/路由分派/409 等离线断言照跑，真 CLI 与写路径以明确原因 SKIP |
-| 独立 clone + `DSH_CONDOPT_VERIFY_ROOT=<condopt 仓库>`（或 `CONDOPT_ROOT`） | `276/282 + 6 SKIP`（沙箱）；指向可写临时根则 `314/314` |
+| 真仓库（`link:` 安装布局） | 受限沙箱 `304/310 + 6 SKIP`；**可写环境 `342/342 + 0 SKIP`**（6 组 SKIP 展开为 38 条真断言，口径同 v2.0 的 283→315） |
+| 独立 clone、**没设环境变量**、旁边没有 condopt 检出 | `203/222 + 19 SKIP`——导出面/纯函数/解析/路由分派/诊断 等离线断言照跑，真 CLI 与写路径以明确原因 SKIP |
+| 独立 clone + `DSH_CONDOPT_VERIFY_ROOT=<condopt 仓库>`（或 `CONDOPT_ROOT`） | `303/309 + 6 SKIP`（沙箱，仅剩 6 组写路径）；指向可写临时根则 0 SKIP |
 
 其余门禁（A4 真实渲染、A5 仓库门禁、A6 独立性、A7 真机 GUI）见 [`docs/VERIFY.md`](docs/VERIFY.md)。
 

@@ -795,12 +795,12 @@ let handler
   }
 }
 
-async function call(handlerFn, { method = 'GET', url = '/', body, headers } = {}) {
+async function call(handlerFn, { method = 'GET', url = '/', body, headers, timeoutMs = 30000 } = {}) {
   const req = makeReq({ method, url, body, headers: body !== undefined ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), ...(headers || {}) } : headers })
   const res = makeRes()
   await Promise.race([
     Promise.resolve(handlerFn(req, res)),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('handler timeout (30s)')), 30000)),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`handler timeout (${timeoutMs}ms)`)), timeoutMs)),
   ])
   let json = null
   try { json = res.body ? JSON.parse(res.body) : null } catch { json = null }
@@ -1031,6 +1031,143 @@ if (handler) {
         process.chdir(prevCwd)
       }
       check('全部候选不合法 → 409 root-not-found', !r.threw && r.value.status === 409 && r.value.json && r.value.json.code === 'root-not-found', "409 {code:'root-not-found'}", r.threw ? 'throw' : `${r.value.status} ${JSON.stringify(r.value.json)}`)
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ 9b. v3.0 诊断端点（DESIGN §8.7 G/J） */
+
+group('v3.0 /api/diagnostics（DESIGN §8.7 G/J）')
+
+const CANDIDATE_LEVELS = ['request', 'env', 'config', 'self', 'session', 'workspace', 'cwd']
+let pluginPkgVersion = ''
+try {
+  pluginPkgVersion = JSON.parse(await readFile(join(pluginDir, 'package.json'), 'utf8')).version
+} catch {
+  pluginPkgVersion = ''
+}
+
+/* 未命中 root：用注入的 selfDir + 空 workspaces + chdir 到空目录，让七级候选全不合法。 */
+{
+  const emptyDiagRoot = join(tmpBase, 'diag-nowhere')
+  await mkdir(emptyDiagRoot, { recursive: true })
+  const res = thrown(() => mod.createHandler({ config: {}, env: {}, cwd: emptyDiagRoot, selfDir: join(emptyDiagRoot, 'dsh-plugin'), workspaces: [], tmpDir: handlerTmp }))
+  if (res.threw) {
+    fail('诊断 handler 创建（未命中 root）', '(req,res)=>Promise', `throw ${res.err && res.err.message}`)
+  } else {
+    const prevCwd = process.cwd()
+    let r
+    try {
+      process.chdir(emptyDiagRoot)
+      r = await thrownAsync(() => call(res.value, { url: '/condopt/api/diagnostics' }))
+    } finally {
+      process.chdir(prevCwd)
+    }
+    if (r.threw) fail('未命中 root 的 /api/diagnostics', '200 JSON', `throw ${r.err && r.err.message}`)
+    else {
+      const body = r.value.json || {}
+      check('未命中 root → HTTP 200（诊断不因 root 缺失而 409/500）', r.value.status === 200, '200', `${r.value.status} ${r.value.body.slice(0, 140)}`)
+      const cands = Array.isArray(body.candidates) ? body.candidates : []
+      check('未命中 root → candidates 七级齐全且顺序正确', cands.length === 7 && CANDIDATE_LEVELS.every((level, index) => cands[index] && cands[index].level === level), CANDIDATE_LEVELS.join(','), JSON.stringify(cands.map((c) => c && c.level)))
+      check('未命中 root → 候选 valid 全为 false（布尔）', cands.length === 7 && cands.every((c) => c.valid === false), '全部 false', JSON.stringify(cands.map((c) => c && c.valid)))
+      check("未命中 root → root.source === 'none'", body.root && body.root.source === 'none', "source='none'", JSON.stringify(body.root))
+    }
+  }
+}
+
+/* 命中 root（有真实检出时才谈“命中哪一级”）。 */
+if (!hasRealRoot) {
+  skip('v3.0 /api/diagnostics 命中 root 的形状与探测', NO_ROOT_REASON)
+} else if (!handler) {
+  note('handler 不可用，跳过 /api/diagnostics 命中路径')
+} else {
+  const runDir = join(repoRoot, 'runs', 'demo_moo')
+  const before = await snapshotDir(runDir)
+  const r = await thrownAsync(() => call(handler, { url: '/condopt/api/diagnostics' }))
+  const after = await snapshotDir(runDir)
+  if (r.threw) fail('GET /api/diagnostics', '200 JSON', `throw ${r.err && r.err.message}`)
+  else {
+    const body = r.value.json || {}
+    check('GET /api/diagnostics → 200', r.value.status === 200, '200', `${r.value.status} ${r.value.body.slice(0, 140)}`)
+    check('diagnostics.ok === true', body.ok === true, 'true', JSON.stringify(body.ok))
+    check('plugin.name === dsh-condopt', body.plugin && body.plugin.name === 'dsh-condopt', 'dsh-condopt', JSON.stringify(body.plugin && body.plugin.name))
+    check('plugin.version === package.json version', body.plugin && body.plugin.version === pluginPkgVersion && pluginPkgVersion !== '', pluginPkgVersion, String(body.plugin && body.plugin.version))
+    check('plugin.node / dshEngine 是非空字符串', body.plugin && typeof body.plugin.node === 'string' && body.plugin.node.length > 0 && typeof body.plugin.dshEngine === 'string' && body.plugin.dshEngine.length > 0, 'node+dshEngine 字符串', JSON.stringify(body.plugin && { node: body.plugin.node, dshEngine: body.plugin.dshEngine }))
+    const cands = Array.isArray(body.candidates) ? body.candidates : []
+    check('命中 root → candidates 七级齐全且顺序正确', cands.length === 7 && CANDIDATE_LEVELS.every((level, index) => cands[index] && cands[index].level === level), CANDIDATE_LEVELS.join(','), JSON.stringify(cands.map((c) => c && c.level)))
+    check('candidates 每项 {level,path,valid,detail} 形状正确', cands.length === 7 && cands.every((c) => c && typeof c.level === 'string' && typeof c.valid === 'boolean' && typeof c.detail === 'string' && (c.path === null || c.path === undefined || typeof c.path === 'string')), '{level,path,valid:boolean,detail}', JSON.stringify(cands.slice(0, 3)))
+    const firstValid = cands.find((c) => c && c.valid === true)
+    check('root.source 与候选表一致（= 第一个合法候选的 level）', firstValid !== undefined && body.root && body.root.source === firstValid.level, `source=${firstValid && firstValid.level}`, JSON.stringify({ root: body.root, firstValid: firstValid && { level: firstValid.level, path: firstValid.path } }))
+    check('root.path === 该合法候选的 path', firstValid !== undefined && body.root && typeof body.root.path === 'string' && samePath(body.root.path, firstValid.path), firstValid && firstValid.path, String(body.root && body.root.path))
+    check('合法候选 detail=ok、不合法候选 detail ∈ {not-a-condopt-root,missing}', cands.length === 7 && cands.every((c) => (c.valid === true ? c.detail === 'ok' : ['not-a-condopt-root', 'missing'].includes(c.detail))), 'ok / not-a-condopt-root / missing', JSON.stringify(cands.map((c) => [c.level, c.valid, c.detail])))
+    check('python 形状 {spec, ok:boolean, probe}', body.python && typeof body.python.spec === 'string' && typeof body.python.ok === 'boolean' && body.python.probe !== null && typeof body.python.probe === 'object' && typeof body.python.probe.ok === 'boolean', '{spec,ok:boolean,probe:{ok}}', JSON.stringify(body.python))
+    check('cli.path 指向 scripts/run_condopt.py 且 cli.ok 布尔', body.cli && typeof body.cli.path === 'string' && body.cli.path.replace(/\\/g, '/').endsWith('scripts/run_condopt.py') && typeof body.cli.ok === 'boolean', '{path:.../scripts/run_condopt.py, ok:boolean}', JSON.stringify(body.cli))
+    check('condopt.version 存在', body.condopt && typeof body.condopt.version === 'string', 'string', JSON.stringify(body.condopt))
+    check('env 形状含 CONDOPT_ROOT/CONDOPT_PYTHON 键', body.env && typeof body.env === 'object' && 'CONDOPT_ROOT' in body.env && 'CONDOPT_PYTHON' in body.env, '{CONDOPT_ROOT,CONDOPT_PYTHON}', JSON.stringify(body.env))
+    check('allowExec === true', body.allowExec === true, 'true', String(body.allowExec))
+    check('degraded 是数组', Array.isArray(body.degraded), '[]', JSON.stringify(body.degraded))
+    if (Array.isArray(body.degraded) && body.degraded.length > 0) note(`degraded: ${JSON.stringify(body.degraded)}`)
+  }
+  const diff = diffSnapshots(before, after)
+  check('/api/diagnostics 不写 run 目录（零写入）', diff.length === 0, 'run 目录无新增/无 mtime 变化', diff.join('; ') || '干净')
+
+  /* 零 spawn 渲染：注入记录型 spawn，断言没有 render 调用（且不抛）。 */
+  {
+    const argvCalls = []
+    const recorder = (prog, args) => {
+      argvCalls.push(Array.isArray(args) ? args.join(' ') : String(args))
+      return Promise.resolve({ ok: true, code: 0, stdout: 'Python 3.14.8\n', stderr: '', timedOut: false })
+    }
+    const res = thrown(() => mod.createHandler({ ...deps, spawnImpl: recorder }))
+    if (res.threw) fail('诊断 handler（记录型 spawn）创建', '(req,res)=>Promise', `throw ${res.err && res.err.message}`)
+    else {
+      const rr = await thrownAsync(() => call(res.value, { url: '/condopt/api/diagnostics' }))
+      check('诊断端点不 spawn 渲染（零 render）', !rr.threw && !argvCalls.some((line) => /\brender\b/.test(line)), 'argv 无 render', JSON.stringify(argvCalls))
+    }
+  }
+
+  /* python 探测失败：假 spawn 返回非 0 → 200 且 python.ok=false。 */
+  {
+    const failSpawn = () => Promise.resolve({ ok: false, code: 1, stdout: '', stderr: 'cannot run python', timedOut: false, error: 'boom' })
+    const res = thrown(() => mod.createHandler({ ...deps, spawnImpl: failSpawn }))
+    if (res.threw) fail('诊断 handler（失败 spawn）创建', '(req,res)=>Promise', `throw ${res.err && res.err.message}`)
+    else {
+      const rr = await thrownAsync(() => call(res.value, { url: '/condopt/api/diagnostics' }))
+      if (rr.threw) fail('python 探测失败 → 200 {python.ok:false}', '200', `throw ${rr.err && rr.err.message}`)
+      else {
+        const body = rr.value.json || {}
+        check('python 探测失败 → HTTP 200 不 500', rr.value.status === 200, '200', String(rr.value.status))
+        check('python 探测失败 → python.ok === false', body.python && body.python.ok === false, 'false', JSON.stringify(body.python))
+      }
+    }
+  }
+
+  /* python 探测挂起：假 spawn 永不结算 → 5s 超时路径，不挂起、ok:false。 */
+  {
+    const hangSpawn = () => new Promise(() => {})
+    const res = thrown(() => mod.createHandler({ ...deps, spawnImpl: hangSpawn }))
+    if (res.threw) fail('诊断 handler（挂起 spawn）创建', '(req,res)=>Promise', `throw ${res.err && res.err.message}`)
+    else {
+      const started = Date.now()
+      /* 契约是 5s 探测超时；给 12s 余量，超了就算失败（避免真缺陷把 harness 拖到 30s）。 */
+      const rr = await thrownAsync(() => call(res.value, { url: '/condopt/api/diagnostics', timeoutMs: 12000 }))
+      const elapsed = Date.now() - started
+      if (rr.threw) fail('python 探测挂起 → 超时后仍 200', '200 {python.ok:false}（探测 5s 超时）', `throw ${rr.err && rr.err.message}`)
+      else {
+        const body = rr.value.json || {}
+        check('python 探测挂起 → 不挂起（< 12s 内返回）', elapsed < 12000, '<12000ms（契约 5s）', `${elapsed}ms`)
+        check('python 探测挂起 → HTTP 200 且 python.ok === false', rr.value.status === 200 && body.python && body.python.ok === false, '200 {python.ok:false}', `${rr.value.status} ${JSON.stringify(body.python)}`)
+      }
+    }
+  }
+
+  /* allowExec 如实上报。 */
+  {
+    const res = thrown(() => mod.createHandler({ ...deps, config: { projectRoot: repoRoot, allowExec: false } }))
+    if (res.threw) fail('诊断 handler（allowExec=false）创建', '(req,res)=>Promise', `throw ${res.err && res.err.message}`)
+    else {
+      const rr = await thrownAsync(() => call(res.value, { url: '/condopt/api/diagnostics' }))
+      check('allowExec=false → diagnostics.allowExec === false', !rr.threw && rr.value.status === 200 && rr.value.json && rr.value.json.allowExec === false, "200 {allowExec:false}", rr.threw ? 'throw' : `${rr.value.status} ${JSON.stringify(rr.value.json && rr.value.json.allowExec)}`)
     }
   }
 }
