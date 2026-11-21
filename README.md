@@ -1,3 +1,10 @@
+> **已冻结（2026-11-22）— FROZEN**
+> 本目录/本仓库不再跟进开发，交互面已收敛到 condopt 的**浏览器工作台**：
+> <https://github.com/sprw-li/condopt-workbench>；agent 侧入口是
+> <https://github.com/sprw-li/condopt-router> 里的 skill（`skill/SKILL.md`）。
+> 这里是一份完整可用的历史实现（含 host / client 两套 harness），保留作为实现参考与回归素材——
+> 代码仍可读、仍可用，但不会跟随上游修复。
+
 # dsh-condopt
 
 把 [condopt](https://github.com/sprw-li/condopt-router) 的条件优化内容视图搬进 **DeepSeek Harness** 的独立插件：右侧栏面板 +
